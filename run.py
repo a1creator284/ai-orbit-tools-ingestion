@@ -32,7 +32,7 @@ from src.discovery.registry import SourceRegistry
 from src.discovery.runner import DiscoveryRunner
 from src.models.tool import Tool
 from src.pipeline import ToolsPipeline
-from src.scoring.filter import QualityFilter
+from src.scoring.filter import Outcome, QualityFilter
 from src.scoring.scorer import QualityScorer, rank_and_select
 from src.validation.validator import ToolValidator
 
@@ -134,12 +134,29 @@ def cmd_selfcheck(args: argparse.Namespace) -> int:
             f"repeat={scorer.score(left).total}",
         )
     )
-    decision = QualityFilter(settings.scoring).decide(left)
+    # Two distinct refusals, both of which must carry a recorded reason.
+    # ``QualityScorer.score`` is deliberately pure, so the record above is
+    # still *unscored*: filtering it must produce ``unscored``, not ``reject``.
+    # A record that was actually scored and fell short must produce ``reject``.
+    quality_filter = QualityFilter(settings.scoring)
+    unscored_decision = quality_filter.decide(left.model_copy(deep=True))
     checks.append(
         (
-            "an unscorable record is rejected with a recorded reason",
-            decision.outcome == "reject" and bool(decision.rejection_reason),
-            f"outcome={decision.outcome} reason={decision.rejection_reason}",
+            "an unscored record is refused with a recorded reason",
+            unscored_decision.outcome == Outcome.UNSCORED
+            and bool(unscored_decision.rejection_reason),
+            f"outcome={unscored_decision.outcome} "
+            f"reason={unscored_decision.rejection_reason}",
+        )
+    )
+    low_scoring = scorer.apply(left.model_copy(deep=True))
+    decision = quality_filter.decide(low_scoring)
+    checks.append(
+        (
+            "a record below the reject threshold is rejected with a reason",
+            decision.outcome == Outcome.REJECT and bool(decision.rejection_reason),
+            f"outcome={decision.outcome} score={decision.score} "
+            f"reason={decision.rejection_reason}",
         )
     )
 

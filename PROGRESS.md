@@ -356,6 +356,116 @@ dedup or discovery.
 
 ---
 
+### Run #10 — production 100-point scoring and filtering
+
+`src/scoring/` became the real thing rather than a placeholder, split into
+three modules with one responsibility each:
+
+* **`rubric.py` — the single definition of the rubric.** The eight guideline
+  §5 weights (25/20/15/15/10/5/5/5 = 100), the bands, the thresholds, and each
+  component's sub-criteria expressed as **shares of that component's own
+  weight**. `validate_rubric()` asserts the weights sum to exactly 100 and
+  that no component's shares exceed 1.0, so a component structurally cannot
+  overflow its weight and the total cannot exceed 100. `config/settings.yaml`
+  is now checked against this module instead of being trusted.
+* **`scorer.py` — the evaluator.** Turns a `Tool` into a `ScoreBreakdown` with
+  a per-criterion audit trail. Pure and deterministic: no clock (`today` is
+  injectable), no randomness, and every award quantized half-up so there is no
+  float drift between runs or interpreters. Missing evidence earns nothing and
+  is recorded (`missing_evidence`, `unevidenced_components`), never replaced by
+  a plausible default; `evidence_confidence` reports how much of the 100 points
+  was even assessable. Adoption, activity and recency all consult one shared
+  `CurrencyAssessment`, so a historically famous product with a dead site
+  cannot ride past the thresholds on old fame — and the discount is written
+  into `adjustments` instead of applied silently.
+* **`filter.py` — the admission policy.** Applies §5 verbatim (`<60` reject,
+  `60-69` skip, `70-79` selective, `>=80` include). A 70-79 record is admitted
+  only when it clears all five `SELECTIVE_REQUIREMENTS` evidence gates;
+  otherwise it is skipped with the failing gate named. Nothing here can promote
+  a record to reach a target count.
+
+### Run #11 — scoring regression coverage (this run)
+
+**Unit 11.1 — `tests/test_scoring_rubric.py` (+136 tests)**
+
+Run #10 shipped the scoring system but the 259-test suite contained **no
+dedicated scoring tests** — the rubric, the currency gating and the thresholds
+were only exercised incidentally, through `run.py selfcheck`. This unit closes
+that gap. The scoring architecture was **not** redesigned: the tests were
+written against the implementation as it stands, and the rubric and thresholds
+are unchanged.
+
+What is now pinned:
+
+* **The rubric is the contract.** The eight weights are asserted against a
+  hand-written literal (`25/20/15/15/10/5/5/5`), summing to exactly 100, in
+  rubric order; `ScoreBreakdown`'s schema bounds are asserted to equal those
+  weights, so the model and the rubric cannot drift apart; `validate_rubric`
+  is asserted to reject tampered tables (99, 101, missing and unknown
+  components).
+* **Bounding.** Every component stays within `[0, weight]` and every criterion
+  award within its declared share — including for a deliberately over-stuffed
+  record (40 features, 10¹² visits, every platform), which saturates
+  components but cannot overflow them. Component points are asserted to equal
+  the sum of their criteria awards, so the audit trail always reconciles.
+* **Determinism.** Repeated scoring of the same `Tool`, two equal `Tool`s and
+  two independent scorers all produce byte-identical breakdowns; the total
+  always equals the component-point sum and stays within 0-100; `score()` is
+  asserted not to mutate the record.
+* **No fabrication.** An empty record scores below 60 with **zero** points in
+  seven of eight components (only "we could not verify it" — itself a finding —
+  may score), every unmet criterion appears in `missing_evidence` in rubric
+  order, a missed criterion never appears in the award trail, and an
+  unverifiable or *future* launch date earns neither recency nor operating
+  history.
+* **Currency gating.** All four `CurrencyAssessment` states are covered: dead
+  statuses and an inaccessible site zero adoption and recency; stale
+  verification (> 180 days) discounts them; an undated check and a
+  directory-claimed live status are explicitly *weaker* than a dated
+  accessibility check; absence of evidence is `unknown`, never `current`. A
+  dead tool is asserted to score strictly below an identical live one and below
+  the include threshold, while a currently verified tool does receive full
+  current-evidence credit.
+* **Adjustment edge cases** (the ones most likely to rot): a
+  `note_adjustment` is asserted to leave the points **exactly** unchanged
+  versus an undisturbed builder; a real `discount` is asserted to move the
+  points *and* appear in `adjustments`; two `discount` calls are asserted to
+  apply the factor **once** (0.5, never 0.25); the factor is clamped to
+  `[0, 1]` so it can neither inflate nor go negative; and the recency
+  "momentum halved" path is asserted to halve exactly once rather than
+  halving *and* discounting.
+* **Injectable date.** The same record is scored across pinned dates: recency
+  decays, operating history grows, `current` ages into `accessible_stale`, and
+  each individual date is reproducible.
+* **Thresholds.** All four boundaries are asserted exactly, including
+  `59.99 → reject`, `60.00 → skip`, `69.99 → skip`, `70.00 → selective`,
+  `79.99 → selective` and `80.00 → include`. Each of the five selective gates
+  is failed in isolation and asserted to skip the record and name that gate;
+  gates are asserted *not* to apply at 80+. Rejection and skip reasons are
+  asserted to survive on the record (`rejection_reasons`, `rejection_notes`,
+  `review_notes`) and in the `FilterDecision`. Batch filtering is asserted
+  deterministic across runs, one decision per input in input order, and an
+  all-failing batch is reported empty rather than padded.
+
+**One genuine defect found and fixed (`run.py`, selfcheck only).** The
+shipped `python run.py selfcheck` reported **10/11** on the current checkpoint.
+Its last scoring check scored a record with `QualityScorer.score()` — which is
+deliberately **pure** and returns a breakdown without attaching it — and then
+asserted the filter said `reject`. The filter correctly said `unscored`,
+because the record still had no `quality`. The scorer and the filter were both
+right; the check conflated two different refusals. Fixed in the check (the
+smallest path): it now asserts both refusals separately — `unscored` means
+"never assessed", `reject` means "assessed and below 60" — via `apply()` for
+the latter. `selfcheck` now reports **12/12**, and the distinction is pinned by
+`test_unscored_and_low_scoring_refusals_are_different_outcomes`, with
+`selfcheck` itself now run as a test so it cannot silently regress again. No
+scoring, filtering, rubric or threshold logic was changed.
+
+Not done, by design: no bulk crawl, no enrichment, no LLM descriptions, no
+1,000-tool curation, and no change to Repositories or Videos.
+
+---
+
 ## Tests
 
 | Suite | Count |
