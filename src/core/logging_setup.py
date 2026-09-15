@@ -27,6 +27,50 @@ _RESERVED = {
     "thread", "threadName", "taskName",
 }
 
+#: Prefix applied to a structured-logging key that would shadow a LogRecord
+#: attribute, e.g. ``extra={"name": ...}`` becomes ``ctx_name``.
+_COLLISION_PREFIX = "ctx_"
+
+
+class SafeExtraLogger(logging.Logger):
+    """Logger that never dies because of a colliding ``extra`` key.
+
+    ``Logger.makeRecord`` raises ``KeyError`` when ``extra`` contains a key that
+    already exists on the ``LogRecord`` (``name``, ``module``, ``message``, …).
+    Since every stage logs structured context — and ``extra={"name": ...}`` is
+    the natural way to identify a record — a raising logger would turn a
+    *handled* per-record failure into an unhandled crash, defeating the
+    graceful-degradation contract. Colliding keys are therefore renamed to
+    ``ctx_<key>`` instead of raising, so the context is still recorded.
+    """
+
+    def makeRecord(  # noqa: PLR0913 - signature fixed by the stdlib
+        self,
+        name: str,
+        level: int,
+        fn: str,
+        lno: int,
+        msg: object,
+        args: object,
+        exc_info: object,
+        func: str | None = None,
+        extra: dict | None = None,
+        sinfo: str | None = None,
+    ) -> logging.LogRecord:
+        if extra:
+            extra = {
+                (f"{_COLLISION_PREFIX}{key}" if key in _RESERVED else key): value
+                for key, value in extra.items()
+            }
+        return super().makeRecord(
+            name, level, fn, lno, msg, args, exc_info, func, extra, sinfo  # type: ignore[arg-type]
+        )
+
+
+# Registered before any pipeline logger is created (this module is imported by
+# every stage via ``get_logger``), so all ``aiorbit.*`` loggers are safe.
+logging.setLoggerClass(SafeExtraLogger)
+
 
 class JsonLinesFormatter(logging.Formatter):
     """Emit one JSON object per log record."""
@@ -101,4 +145,6 @@ def get_logger(name: str) -> logging.Logger:
     """Return a namespaced child logger, configuring logging on first use."""
     if not _CONFIGURED:
         setup_logging()
+    if logging.getLoggerClass() is not SafeExtraLogger:  # pragma: no cover - defensive
+        logging.setLoggerClass(SafeExtraLogger)
     return logging.getLogger(f"aiorbit.{name}" if not name.startswith("aiorbit") else name)

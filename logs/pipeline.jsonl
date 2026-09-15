@@ -143,3 +143,48 @@
 {"ts": "2026-09-15T19:37:44.041894+00:00", "level": "WARNING", "logger": "aiorbit.discovery.pagination", "message": "listing page blocked by bot challenge", "url": "https://theresanaiforthat.com/tools"}
 {"ts": "2026-09-15T19:37:44.043127+00:00", "level": "WARNING", "logger": "aiorbit.discovery.pagination", "message": "listing page blocked by bot challenge", "url": "https://theresanaiforthat.com/tools"}
 {"ts": "2026-09-15T19:37:44.044372+00:00", "level": "INFO", "logger": "aiorbit.discovery.taaft", "message": "no cards parsed on listing page", "source": "taaft", "url": "https://theresanaiforthat.com/tools"}
+{"ts": "2026-09-15T19:40:32.579526+00:00", "level": "INFO", "logger": "aiorbit.candidates.prepare", "message": "candidate preparation complete", "no_name": 1}
+{"ts": "2026-09-15T19:40:32.581151+00:00", "level": "INFO", "logger": "aiorbit.candidates.prepare", "message": "candidate preparation complete"}
+{"ts": "2026-09-15T19:40:32.582974+00:00", "level": "INFO", "logger": "aiorbit.candidates.prepare", "message": "candidate preparation complete"}
+{"ts": "2026-09-15T19:40:32.703625+00:00", "level": "INFO", "logger": "aiorbit.candidates.prepare", "message": "candidate preparation complete", "no_name": 1}
+{"ts": "2026-09-15T19:40:32.706275+00:00", "level": "INFO", "logger": "aiorbit.candidates.prepare", "message": "candidate preparation complete"}
+{"ts": "2026-09-15T19:41:19.603649+00:00", "level": "INFO", "logger": "aiorbit.candidates.prepare", "message": "candidate preparation complete", "no_name": 1}
+{"ts": "2026-09-15T19:41:19.605285+00:00", "level": "INFO", "logger": "aiorbit.candidates.prepare", "message": "candidate preparation complete"}
+{"ts": "2026-09-15T19:41:19.606452+00:00", "level": "INFO", "logger": "aiorbit.candidates.prepare", "message": "candidate preparation complete"}
+{"ts": "2026-09-15T19:41:19.607510+00:00", "level": "WARNING", "logger": "aiorbit.candidates.prepare", "message": "candidate preparation failed", "ctx_name": "Boom", "error": "corrupt candidate"}
+{"ts": "2026-09-15T19:41:19.607887+00:00", "level": "INFO", "logger": "aiorbit.candidates.prepare", "message": "candidate preparation complete", "preparation_failed": 1}
+{"ts": "2026-09-15T19:41:19.611003+00:00", "level": "INFO", "logger": "aiorbit.candidates.prepare", "message": "candidate preparation complete", "no_name": 1}
+{"ts": "2026-09-15T19:41:19.613558+00:00", "level": "INFO", "logger": "aiorbit.candidates.prepare", "message": "candidate preparation complete"}
+{"ts": "2026-09-15T19:41:37.382616+00:00", "level": "INFO", "logger": "aiorbit.candidates.prepare", "message": "candidate preparation complete", "no_name": 1}
+{"ts": "2026-09-15T19:41:37.384143+00:00", "level": "INFO", "logger": "aiorbit.candidates.prepare", "message": "candidate preparation complete"}
+{"ts": "2026-09-15T19:41:37.385423+00:00", "level": "INFO", "logger": "aiorbit.candidates.prepare", "message": "candidate preparation complete"}
+{"ts": "2026-09-15T19:41:37.386369+00:00", "level": "WARNING", "logger": "aiorbit.candidates.prepare", "message": "candidate preparation failed", "ctx_name": "Boom", "error": "corrupt candidate"}
+{"ts": "2026-09-15T19:41:37.386762+00:00", "level": "INFO", "logger": "aiorbit.candidates.prepare", "message": "candidate preparation complete", "preparation_failed": 1}
+{"ts": "2026-09-15T19:41:37.389588+00:00", "level": "INFO", "logger": "aiorbit.candidates.prepare", "message": "candidate preparation complete", "no_name": 1}
+{"ts": "2026-09-15T19:41:37.391890+00:00", "level": "INFO", "logger": "aiorbit.candidates.prepare", "message": "candidate preparation complete"}
+{"ts": "2026-09-15T19:41:37.405781+00:00", "level": "WARNING", "logger": "aiorbit.io", "message": "skipping malformed jsonl line", "path": "/tmp/pytest-of-user/pytest-5/test_skips_malformed_json_line0/taaft.jsonl", "line": 2, "error": "Expecting property name enclosed in double quotes: line 1 column 3 (char 2)"}
+{"ts": "2026-09-15T19:41:37.406084+00:00", "level": "INFO", "logger": "aiorbit.candidates.store", "message": "candidates loaded", "path": "/tmp/pytest-of-user/pytest-5/test_skips_malformed_json_line0/taaft.jsonl", "loaded": 2, "skipped": 0}
+{"ts": "2026-09-15T19:41:37.407257+00:00", "level": "WARNING", "logger": "aiorbit.candidates.store", "message": "candidate file missing", "path": "/tmp/pytest-of-user/pytest-5/test_missing_file_is_reported_0/absent.jsonl"}
+{"ts": "2026-09-15T19:41:37.408552+00:00", "level": "INFO", "logger": "aiorbit.candidates.store", "message": "candidates loaded", "path": "/tmp/pytest-of-user/pytest-5/test_empty_file_yields_nothing0/empty.jsonl", "loaded": 0, "skipped": 0}
+{"ts": "2026-09-15T19:41:37.410343+00:00", "level": "INFO", "logger": "aiorbit.candidates.store", "message": "candidates loaded", "path": "/tmp/pytest-of-user/pytest-5/test_loads_every_source_and_pr0/discovery/creati.jsonl", "loaded": 1, "skipped": 1}
+{"ts": "2026-09-15T19:41:37.410688+00:00", "level": "INFO", "logger": "aiorbit.candidates.store", "message": "candidates loaded", "path": "/tmp/pytest-of-user/pytest-5/test_loads_every_source_and_pr0/discovery/taaft.jsonl", "loaded": 1, "skipped": 1}
+{"ts": "2026-09-15T19:41:37.412441+00:00", "level": "INFO", "logger": "aiorbit.candidates.store", "message": "candidates loaded", "path": "/tmp/pytest-of-user/pytest-5/test_can_restrict_to_specific_0/discovery/taaft.jsonl", "loaded": 1, "skipped": 0}
+{"ts": "2026-09-15T19:41:37.414078+00:00", "level": "INFO", "logger": "aiorbit.candidates.store", "message": "candidates loaded", "path": "/tmp/pytest-of-user/pytest-5/test_the_merged_feed_is_not_re0/discovery/creati.jsonl", "loaded": 1, "skipped": 1}
+{"ts": "2026-09-15T19:41:37.414528+00:00", "level": "INFO", "logger": "aiorbit.candidates.store", "message": "candidates loaded", "path": "/tmp/pytest-of-user/pytest-5/test_the_merged_feed_is_not_re0/discovery/taaft.jsonl", "loaded": 1, "skipped": 1}
+{"ts": "2026-09-15T19:41:37.418455+00:00", "level": "WARNING", "logger": "aiorbit.candidates.store", "message": "discovery directory missing", "path": "/tmp/pytest-of-user/pytest-5/test_missing_directory_is_repo0/nowhere/discovery"}
+{"ts": "2026-09-15T19:41:37.420078+00:00", "level": "INFO", "logger": "aiorbit.candidates.store", "message": "candidates loaded", "path": "/tmp/pytest-of-user/pytest-5/test_report_is_json_serialisab0/discovery/creati.jsonl", "loaded": 1, "skipped": 1}
+{"ts": "2026-09-15T19:41:37.420483+00:00", "level": "INFO", "logger": "aiorbit.candidates.store", "message": "candidates loaded", "path": "/tmp/pytest-of-user/pytest-5/test_report_is_json_serialisab0/discovery/taaft.jsonl", "loaded": 1, "skipped": 1}
+{"ts": "2026-09-15T19:41:37.479835+00:00", "level": "WARNING", "logger": "aiorbit.discovery.pagination", "message": "listing page blocked by bot challenge", "url": "https://theresanaiforthat.com/tools"}
+{"ts": "2026-09-15T19:41:37.482736+00:00", "level": "WARNING", "logger": "aiorbit.discovery.taaft", "message": "listing plan construction failed", "error": "boom"}
+{"ts": "2026-09-15T19:41:37.527293+00:00", "level": "INFO", "logger": "aiorbit.discovery.registry", "message": "loaded source registry", "path": "/home/user/webapp/config/sources.yaml", "count": 21}
+{"ts": "2026-09-15T19:41:37.544797+00:00", "level": "INFO", "logger": "aiorbit.discovery.registry", "message": "loaded source registry", "path": "/home/user/webapp/config/sources.yaml", "count": 21}
+{"ts": "2026-09-15T19:41:37.573386+00:00", "level": "WARNING", "logger": "aiorbit.test.reserved", "message": "record dropped", "ctx_name": "Jasper", "error": "boom"}
+{"ts": "2026-09-15T19:41:37.633334+00:00", "level": "INFO", "logger": "aiorbit.discovery.pagination", "message": "pagination stopped: page repeats previous content", "url": "https://x.example/tools?page=2", "page": 2}
+{"ts": "2026-09-15T19:41:37.635576+00:00", "level": "WARNING", "logger": "aiorbit.discovery.pagination", "message": "listing page blocked by bot challenge", "url": "https://x.example/tools"}
+{"ts": "2026-09-15T19:41:37.802384+00:00", "level": "INFO", "logger": "aiorbit.discovery.pagination", "message": "pagination stopped: page repeats previous content", "url": "https://creati.ai/ai-tools?page=2", "page": 2}
+{"ts": "2026-09-15T19:41:37.911563+00:00", "level": "INFO", "logger": "aiorbit.discovery.taaft", "message": "no cards parsed on listing page", "source": "taaft", "url": "https://theresanaiforthat.com/tools"}
+{"ts": "2026-09-15T19:41:37.944324+00:00", "level": "WARNING", "logger": "aiorbit.discovery.pagination", "message": "listing page blocked by bot challenge", "url": "https://theresanaiforthat.com/tools"}
+{"ts": "2026-09-15T19:41:37.945355+00:00", "level": "WARNING", "logger": "aiorbit.discovery.pagination", "message": "listing page blocked by bot challenge", "url": "https://theresanaiforthat.com/tools"}
+{"ts": "2026-09-15T19:41:37.946384+00:00", "level": "INFO", "logger": "aiorbit.discovery.taaft", "message": "no cards parsed on listing page", "source": "taaft", "url": "https://theresanaiforthat.com/tools"}
+{"ts": "2026-09-15T19:41:48.510058+00:00", "level": "INFO", "logger": "aiorbit.candidates.store", "message": "candidates loaded", "path": "data/raw/discovery/creati.jsonl", "loaded": 200, "skipped": 0}
+{"ts": "2026-09-15T19:41:48.555099+00:00", "level": "INFO", "logger": "aiorbit.candidates.prepare", "message": "candidate preparation complete"}
