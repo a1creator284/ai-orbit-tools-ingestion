@@ -23,7 +23,7 @@ the source registry, and `DiscoveryRunner` with immutable raw artefacts under
 under-merging) and `src/discovery/pagination.py` guards (bot-challenge
 detection, repeat-page and empty-page stop reasons).
 
-### Run #4 — candidate processing (this run)
+### Run #4 — candidate processing
 
 **Unit 4.1 — candidate store (`src/candidates/store.py`)**
 Resilient rehydration of persisted discovery candidates so any later stage can
@@ -83,18 +83,90 @@ crash. Fixed centrally with `SafeExtraLogger`, which renames a colliding
 
 ---
 
+### Run #5 — official-website verification (this run)
+
+**Unit 5.1 — official-site verification (`src/verification/verifier.py`)**
+Completed and hardened the only stage allowed to promote a record out of
+`unverified`, and only from evidence fetched from the product's **own** site.
+
+* `extract_official_evidence(url, FetchResult, product_name=...)` — a **pure**
+  function (no network) producing an `OfficialPageEvidence` record: transport
+  facts (status, final URL, content type, redirect/off-domain flags) plus
+  values literally read off the page (title, `og:site_name`, meta description,
+  `h1`/`h2`, logo `alt`, same-site product links, dead-site markers). Nothing
+  is inferred or defaulted.
+* **Only the official URL is ever fetched.** A TAAFT/Creati listing URL is a
+  discovery pointer and is never fetched as a substitute, never counted as
+  verification. No official URL → *no HTTP call at all* (asserted in tests).
+* Safe handling of every failure mode, each with a stable `VerificationFailure`
+  code: `fetch_failed` (timeout/retries exhausted via the existing
+  `HttpClient.try_fetch` graceful-degradation contract), `http_error`,
+  `bot_challenge` (reuses `extraction.html.looks_like_challenge`, so challenge
+  markup can never become evidence), `non_html_response`, `empty_response`,
+  `unparseable_html`, `thin_content`, `dead_site_marker`,
+  `off_domain_redirect`, `identity_not_confirmed`, `no_product_signal`.
+* **Identity** must be confirmed from a page-level brand slot (title,
+  `og:title`/`og:site_name`, main heading, logo `alt`, meta description, or a
+  domain named after the product *plus* the name in body text) — conservative
+  canonicalized matching, whole-token for very short names.
+* **Product existence/functionality** is evidenced only by *same-site*
+  affordances actually on the page (pricing, signup, login, docs/API, download,
+  demo/playground, app/dashboard, or an email/password form). Off-site links
+  (e.g. a Twitter profile) are explicitly not evidence.
+* Status is **granted, never assumed** (`_decide`, one readable policy
+  function): `verified` needs identity **and** a product affordance;
+  identity-only or an off-domain redirect gives `partially_verified` + review;
+  unreadable pages (challenge, non-HTML, empty, thin, unparseable) stay
+  `unverified` + review — unreadable ≠ non-existent, so those are *not*
+  rejected; dead/parked/HTTP-error sites become `unreachable` and reject the
+  Tool (`website_broken` / `dead_or_shutdown`).
+* **Provenance preserved**: official URL, final URL, HTTP status, content type,
+  `checked_at`, ordered concise evidence notes, failure codes and a single
+  concise `reason` per outcome; a `SourceRef(kind="official")` is attached
+  *only* when a status was actually earned.
+* **Discovery provenance stays separate**: `verify_candidate()` returns an
+  immutable `VerificationResult` and never mutates the candidate, so "which
+  directory saw it" and "what its own site proves" can never be conflated.
+* `verify_candidates()` + `VerificationReport` give an auditable batch pass;
+  one hostile record (even a property that raises) is reported, not fatal.
+* Deterministic: injectable clock (`now=`), injectable HTTP client; identical
+  input produces byte-identical `to_dict()` output (asserted).
+* Tool path (`verify()`) rewritten on the same evidence engine: it now fetches
+  the official page **once** and hands that exact response to injected
+  extractors, so no field can be sourced from a page that was not verified.
+  Nothing is invented — launch date, pricing, features, company, integrations,
+  capabilities and usage stay blank and are declared in `unverifiable_fields`.
+* `src/verification/__init__.py` now exports the stage's public API.
+
+---
+
 ## Tests
 
 | Suite | Count |
 |---|---|
 | Before Run #4 | 75 passed |
 | After Unit 4.1 (`tests/test_candidate_store.py`, +18) | 93 passed |
-| After Units 4.2 + 4.3 (`test_candidate_prepare.py` +28, `test_logging_setup.py` +6) | **127 passed** |
+| After Units 4.2 + 4.3 (`test_candidate_prepare.py` +28, `test_logging_setup.py` +6) | 127 passed |
+| After Unit 5.1 (`tests/test_verification_official_site.py`, +41) | **168 passed** |
 
 Offline smoke check against the existing `data/raw/discovery/` artefacts
 (200 real candidates): 200 loaded / 0 skipped, 200 prepared / 0 rejected,
 186 with an official URL, 14 identified by listing URL only, 18 flagged for
 review. No bulk run performed.
+
+Run #5 offline smoke check over the same 200 prepared candidates with a
+deliberately offline client: **exactly 186 fetch attempts** — one per candidate
+that has an official URL, and zero for the 14 that do not. All 186 became
+`unreachable` (`fetch_failed`), the 14 became `failed` (`no_official_url`), and
+**0** were verified. Verification cannot be earned without a real response.
+
+New verification tests cover: success, same-site redirect, off-domain redirect,
+timeout/network failure, HTTP 404/410/500/502, parked domain, non-HTML body,
+empty body, thin page, synthetic *and* real captured Cloudflare challenge
+pages, HTTP 403 block page, missing official URL (with the assertion that the
+listing URL is not fetched), unrelated page (identity not confirmed),
+identity-without-affordance, off-site links not counted as evidence, batch
+reporting, JSON round-trip, determinism and hostile-record resilience.
 
 All tests are offline: HTML fixtures + `FakeHttpClient`, and `tmp_path` JSONL
 fixtures for the candidate store. No network access, no live directory calls.
@@ -107,14 +179,20 @@ fixtures for the candidate store. No network access, no live directory calls.
 * Run #4 Unit 4.1: `79857d7` — candidate store
 * Run #4 Units 4.2 + 4.3: pushed to `origin/main` (candidate preparation +
   logging fix)
+* Run #4 checkpoint: `96361eb`
+* Run #5 Unit 5.1: official-website verification (this commit)
 
 ---
 
 ## Known limitations
 
-* Official-website verification is still not implemented for real: the
-  `verification` stage is skipped while `dry_run: true`. A directory listing is
-  **not** verification.
+* Official-website verification is implemented and tested offline, but has
+  **not** been run against live websites yet: `ToolsPipeline.verify` still
+  skips the stage while `dry_run: true`. No verification artefact is persisted
+  under `data/` yet either (see next step).
+* Verification currently reads only the official **landing** page. Pricing,
+  feature and launch-date extraction from deeper official pages is not
+  implemented — those fields therefore stay blank by design.
 * No LLM enrichment (deliberate — editorial descriptions come later, built only
   from verified facts).
 * `taaft` is bot-protected in practice; it reports
@@ -126,12 +204,18 @@ fixtures for the candidate store. No network access, no live directory calls.
 
 ## Exact next recommended step
 
-Wire the candidate stage into the orchestrator: add a `prepare_candidates`
-stage to `src/pipeline.py` (between `discovery` and `normalization`) plus a
-`python run.py prepare` subcommand that runs
-`load_discovery_dir` → `CandidatePreparer.prepare_many` → `persist`, records
-`PreparationReport` in the run report, and lets `normalize` consume
-`data/interim/candidates_prepared.jsonl`. After that, the next stage is
-real official-website verification (`src/verification/verifier.py`) driven by
-`PreparedCandidate.website`, promoting `verification_status` only on evidence
-actually fetched from the official site.
+**Persist and wire the verification stage.** Specifically:
+
+1. add `verify_candidates` to `src/pipeline.py` between
+   `prepare_candidates` and `normalize`, running
+   `OfficialSiteVerifier.verify_candidates` over the prepared candidates and
+   recording `VerificationReport` in the run report;
+2. persist the outcome to `data/interim/candidates_verified.jsonl` (+
+   `candidates_verification_report.json`) via `write_jsonl`/`write_json`,
+   keeping verified records out of `data/final/`;
+3. add a `python run.py verify` subcommand (with an explicit `--live` flag, so
+   network access is always opt-in) plus a small `--limit` so the first real
+   run can be a 10–20 candidate spot check, not a bulk crawl;
+4. only then consider official-page field extraction (pricing/features), which
+   must feed the existing extractor injection point — still with no LLM and no
+   guessing.
