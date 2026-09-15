@@ -1,0 +1,29 @@
+{
+  "started_at": "2026-09-15T20:57:09.831531+00:00",
+  "finished_at": "2026-09-15T20:57:11.576025+00:00",
+  "input": 50,
+  "fetched": 50,
+  "verified": 40,
+  "partially_verified": 7,
+  "unverified": 3,
+  "unreachable": 0,
+  "failed": 0,
+  "needs_review": 10,
+  "status_counts": {
+    "partially_verified": 7,
+    "unverified": 3,
+    "verified": 40
+  },
+  "failure_counts": {
+    "bot_challenge": 1,
+    "identity_not_confirmed": 2,
+    "no_product_signal": 7
+  },
+  "live": true,
+  "limit": 50,
+  "input_candidates": 200,
+  "considered": 50,
+  "artefacts": {
+    "verified_candidates": "/home/user/webapp/data/interim/candidates_verified.jsonl"
+  }
+}

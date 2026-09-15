@@ -1,0 +1,35 @@
+<!-- Synthetic TAAFT page 2 fixture: distinct content, used to test pagination. -->
+<html><body>
+<div class="tools">
+  <div class="ai">
+    <a class="taaft_title" href="/ai/delta-voice/" title="Delta Voice">Delta Voice</a>
+    <a class="ai_link" rel="nofollow" href="https://deltavoice.example/">Visit</a>
+    <div class="description">Converts text to synthetic speech.</div>
+    <a class="task_label" href="/s/text-to-speech/">Text to speech</a>
+  </div>
+
+  <!--
+    TRUE duplicate of the page-1 "Alpha Writer" candidate: same product, but
+    re-listed with www., a generic /pricing path and a tracking parameter.
+    Normalization + identity must collapse this into the page-1 candidate.
+  -->
+  <div class="ai">
+    <a class="taaft_title" href="/ai/alpha-writer/" title="Alpha Writer">Alpha Writer</a>
+    <a class="ai_link" rel="nofollow" href="https://www.alphawriter.example/pricing?ref=taaft">Visit</a>
+    <div class="description">Drafts long-form articles from an outline.</div>
+  </div>
+
+  <!--
+    DISTINCT product that merely shares a host with page-1's "Alpha Writer"
+    (multi-product vendor domain). Discovery must keep it: deciding whether
+    two products on one host are the same tool belongs to src.deduplication,
+    which is explainable and reviewable. Collapsing here would silently delete
+    real tools (verified on live creati.ai: 13 products on one vendor host).
+  -->
+  <div class="ai">
+    <a class="taaft_title" href="/ai/alpha-writer-pro/" title="Alpha Writer Pro">Alpha Writer Pro</a>
+    <a class="ai_link" rel="nofollow" href="https://www.alphawriter.example/pro">Visit</a>
+    <div class="description">Drafts long-form articles from an outline.</div>
+  </div>
+</div>
+</body></html>
