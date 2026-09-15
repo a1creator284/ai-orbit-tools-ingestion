@@ -1,0 +1,31 @@
+{
+  "started_at": "2026-09-15T19:27:02.868663+00:00",
+  "finished_at": "2026-09-15T19:27:05.138292+00:00",
+  "total_emitted": 200,
+  "total_unique": 200,
+  "cross_source_duplicates": 0,
+  "sources": {
+    "creati": {
+      "source": "creati",
+      "plans_attempted": 1,
+      "plans_blocked": 0,
+      "pages_fetched": 1,
+      "pages_failed": 0,
+      "cards_seen": 267,
+      "cards_unparsed": 0,
+      "candidates_emitted": 200,
+      "duplicates_skipped": 67,
+      "stop_reasons": {
+        "limit_reached": 1
+      },
+      "errors": [],
+      "emitted": 200
+    }
+  },
+  "artefacts": {
+    "raw_creati": "/home/user/webapp/data/raw/discovery/creati.jsonl",
+    "merged_candidates": "/home/user/webapp/data/raw/candidates.jsonl",
+    "discovery_report": "/home/user/webapp/data/raw/discovery/report.json"
+  },
+  "notes": []
+}

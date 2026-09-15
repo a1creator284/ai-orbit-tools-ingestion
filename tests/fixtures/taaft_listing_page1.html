@@ -1,0 +1,39 @@
+<!--
+  Synthetic TAAFT listing fixture.
+
+  The live site is behind a Cloudflare challenge, so this fixture reproduces the
+  structural shape of a listing page (card container, title anchor, outbound
+  link, task label, save counter) in order to test the parser without depending
+  on an unstable / blocked live website. It contains no real tool data claims
+  beyond example.com placeholders.
+-->
+<html><body>
+<div class="tools">
+  <div class="ai" data-saves="1,204">
+    <a class="taaft_title" href="/ai/alpha-writer/" title="Alpha Writer">Alpha Writer</a>
+    <a class="ai_link" rel="nofollow" href="https://alphawriter.example/?ref=taaft">Visit</a>
+    <div class="description">Drafts long-form articles from an outline.</div>
+    <a class="task_label" href="/s/writing/">Writing</a>
+    <span class="saves">1,204 saves</span>
+  </div>
+
+  <div class="ai">
+    <a class="taaft_title" href="/ai/beta-vision/" title="Beta Vision">Beta Vision</a>
+    <a class="ai_link" rel="nofollow" href="https://betavision.example/pricing?utm_source=taaft">Visit</a>
+    <div class="description">Detects objects in uploaded images.</div>
+    <a class="task_label" href="/s/image-recognition/">Image recognition</a>
+    <span class="upvotes">88 upvotes</span>
+  </div>
+
+  <!-- missing outbound link: detail page only -->
+  <div class="ai">
+    <a class="taaft_title" href="/ai/gamma-notes/" title="Gamma Notes">Gamma Notes</a>
+    <div class="description">Summarises meeting recordings.</div>
+  </div>
+
+  <!-- no name and no links: must be dropped -->
+  <div class="ai">
+    <div class="description">Orphan description with no identity.</div>
+  </div>
+</div>
+</body></html>
