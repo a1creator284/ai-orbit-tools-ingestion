@@ -1,0 +1,44 @@
+{"ts": "2026-09-15T17:57:05.901211+00:00", "level": "INFO", "logger": "aiorbit.discovery.registry", "message": "loaded source registry", "path": "/home/user/webapp/config/sources.yaml", "count": 21}
+{"ts": "2026-09-15T17:57:35.108495+00:00", "level": "INFO", "logger": "aiorbit.discovery.registry", "message": "loaded source registry", "path": "/home/user/webapp/config/sources.yaml", "count": 21}
+{"ts": "2026-09-15T17:58:07.728914+00:00", "level": "INFO", "logger": "aiorbit.discovery.registry", "message": "loaded source registry", "path": "/home/user/webapp/config/sources.yaml", "count": 21}
+{"ts": "2026-09-15T17:58:13.951716+00:00", "level": "INFO", "logger": "aiorbit.discovery.registry", "message": "loaded source registry", "path": "/home/user/webapp/config/sources.yaml", "count": 21}
+{"ts": "2026-09-15T17:58:13.952068+00:00", "level": "INFO", "logger": "aiorbit.pipeline", "message": "pipeline run starting", "dry_run": true, "batch": 1, "target": 1000}
+{"ts": "2026-09-15T17:58:13.952480+00:00", "level": "WARNING", "logger": "aiorbit.pipeline", "message": "no discovery adapters are enabled/implemented; configured sources: 21"}
+{"ts": "2026-09-15T17:58:13.952669+00:00", "level": "INFO", "logger": "aiorbit.validation", "message": "validation complete", "total": 0, "publishable": 0, "blocked": 0, "issues_by_rule": {}}
+{"ts": "2026-09-15T17:58:13.952795+00:00", "level": "INFO", "logger": "aiorbit.scoring", "message": "batch selection complete", "selected": 0, "not_selected": 0, "target": 1000, "min_score": 70}
+{"ts": "2026-09-15T17:58:13.952909+00:00", "level": "INFO", "logger": "aiorbit.enrichment.relationships", "message": "relationship extraction complete", "edges": 0}
+{"ts": "2026-09-15T17:58:13.959308+00:00", "level": "INFO", "logger": "aiorbit.pipeline", "message": "pipeline run complete", "stage": "relationships", "input": 0, "output": 0, "dropped": 0, "errors": 0, "started_at": "2026-09-15T17:58:13.952896+00:00", "finished_at": "2026-09-15T17:58:13.952979+00:00", "details": {"by_type": {}}}
+{"ts": "2026-09-15T18:58:35.982906+00:00", "level": "WARNING", "logger": "aiorbit.discovery.pagination", "message": "listing page blocked by bot challenge", "url": "https://theresanaiforthat.com/tools"}
+{"ts": "2026-09-15T18:58:35.985313+00:00", "level": "WARNING", "logger": "aiorbit.discovery.taaft", "message": "listing plan construction failed", "error": "boom"}
+{"ts": "2026-09-15T18:58:36.032107+00:00", "level": "INFO", "logger": "aiorbit.discovery.registry", "message": "loaded source registry", "path": "/home/user/webapp/config/sources.yaml", "count": 21}
+{"ts": "2026-09-15T18:58:36.049681+00:00", "level": "INFO", "logger": "aiorbit.discovery.registry", "message": "loaded source registry", "path": "/home/user/webapp/config/sources.yaml", "count": 21}
+{"ts": "2026-09-15T18:58:36.078510+00:00", "level": "INFO", "logger": "aiorbit.discovery.pagination", "message": "pagination stopped: page repeats previous content", "url": "https://x.example/tools?page=2", "page": 2}
+{"ts": "2026-09-15T18:58:36.079462+00:00", "level": "WARNING", "logger": "aiorbit.discovery.pagination", "message": "listing page blocked by bot challenge", "url": "https://x.example/tools"}
+{"ts": "2026-09-15T18:58:36.193103+00:00", "level": "INFO", "logger": "aiorbit.discovery.pagination", "message": "pagination stopped: page repeats previous content", "url": "https://creati.ai/ai-tools?page=2", "page": 2}
+{"ts": "2026-09-15T18:58:36.304103+00:00", "level": "INFO", "logger": "aiorbit.discovery.taaft", "message": "no cards parsed on listing page", "source": "taaft", "url": "https://theresanaiforthat.com/tools"}
+{"ts": "2026-09-15T18:58:36.324502+00:00", "level": "WARNING", "logger": "aiorbit.discovery.pagination", "message": "listing page blocked by bot challenge", "url": "https://theresanaiforthat.com/tools"}
+{"ts": "2026-09-15T18:58:36.325652+00:00", "level": "WARNING", "logger": "aiorbit.discovery.pagination", "message": "listing page blocked by bot challenge", "url": "https://theresanaiforthat.com/tools"}
+{"ts": "2026-09-15T18:58:36.326591+00:00", "level": "INFO", "logger": "aiorbit.discovery.taaft", "message": "no cards parsed on listing page", "source": "taaft", "url": "https://theresanaiforthat.com/tools"}
+{"ts": "2026-09-15T18:58:43.797844+00:00", "level": "WARNING", "logger": "aiorbit.discovery.pagination", "message": "listing page blocked by bot challenge", "url": "https://theresanaiforthat.com/tools"}
+{"ts": "2026-09-15T18:58:43.800398+00:00", "level": "WARNING", "logger": "aiorbit.discovery.taaft", "message": "listing plan construction failed", "error": "boom"}
+{"ts": "2026-09-15T18:58:43.839353+00:00", "level": "INFO", "logger": "aiorbit.discovery.registry", "message": "loaded source registry", "path": "/home/user/webapp/config/sources.yaml", "count": 21}
+{"ts": "2026-09-15T18:58:43.855670+00:00", "level": "INFO", "logger": "aiorbit.discovery.registry", "message": "loaded source registry", "path": "/home/user/webapp/config/sources.yaml", "count": 21}
+{"ts": "2026-09-15T18:58:43.883841+00:00", "level": "INFO", "logger": "aiorbit.discovery.pagination", "message": "pagination stopped: page repeats previous content", "url": "https://x.example/tools?page=2", "page": 2}
+{"ts": "2026-09-15T18:58:43.884773+00:00", "level": "WARNING", "logger": "aiorbit.discovery.pagination", "message": "listing page blocked by bot challenge", "url": "https://x.example/tools"}
+{"ts": "2026-09-15T18:58:43.992820+00:00", "level": "INFO", "logger": "aiorbit.discovery.pagination", "message": "pagination stopped: page repeats previous content", "url": "https://creati.ai/ai-tools?page=2", "page": 2}
+{"ts": "2026-09-15T18:58:44.081374+00:00", "level": "INFO", "logger": "aiorbit.discovery.taaft", "message": "no cards parsed on listing page", "source": "taaft", "url": "https://theresanaiforthat.com/tools"}
+{"ts": "2026-09-15T18:58:44.109421+00:00", "level": "WARNING", "logger": "aiorbit.discovery.pagination", "message": "listing page blocked by bot challenge", "url": "https://theresanaiforthat.com/tools"}
+{"ts": "2026-09-15T18:58:44.111027+00:00", "level": "WARNING", "logger": "aiorbit.discovery.pagination", "message": "listing page blocked by bot challenge", "url": "https://theresanaiforthat.com/tools"}
+{"ts": "2026-09-15T18:58:44.115808+00:00", "level": "INFO", "logger": "aiorbit.discovery.taaft", "message": "no cards parsed on listing page", "source": "taaft", "url": "https://theresanaiforthat.com/tools"}
+{"ts": "2026-09-15T18:59:25.532410+00:00", "level": "INFO", "logger": "aiorbit.discovery.registry", "message": "loaded source registry", "path": "/home/user/webapp/config/sources.yaml", "count": 21}
+{"ts": "2026-09-15T18:59:26.294913+00:00", "level": "WARNING", "logger": "aiorbit.discovery.pagination", "message": "listing page blocked by bot challenge", "url": "https://theresanaiforthat.com/tools"}
+{"ts": "2026-09-15T18:59:26.297372+00:00", "level": "WARNING", "logger": "aiorbit.discovery.taaft", "message": "listing plan construction failed", "error": "boom"}
+{"ts": "2026-09-15T18:59:26.337564+00:00", "level": "INFO", "logger": "aiorbit.discovery.registry", "message": "loaded source registry", "path": "/home/user/webapp/config/sources.yaml", "count": 21}
+{"ts": "2026-09-15T18:59:26.354642+00:00", "level": "INFO", "logger": "aiorbit.discovery.registry", "message": "loaded source registry", "path": "/home/user/webapp/config/sources.yaml", "count": 21}
+{"ts": "2026-09-15T18:59:26.382195+00:00", "level": "INFO", "logger": "aiorbit.discovery.pagination", "message": "pagination stopped: page repeats previous content", "url": "https://x.example/tools?page=2", "page": 2}
+{"ts": "2026-09-15T18:59:26.383112+00:00", "level": "WARNING", "logger": "aiorbit.discovery.pagination", "message": "listing page blocked by bot challenge", "url": "https://x.example/tools"}
+{"ts": "2026-09-15T18:59:26.496574+00:00", "level": "INFO", "logger": "aiorbit.discovery.pagination", "message": "pagination stopped: page repeats previous content", "url": "https://creati.ai/ai-tools?page=2", "page": 2}
+{"ts": "2026-09-15T18:59:26.584454+00:00", "level": "INFO", "logger": "aiorbit.discovery.taaft", "message": "no cards parsed on listing page", "source": "taaft", "url": "https://theresanaiforthat.com/tools"}
+{"ts": "2026-09-15T18:59:26.600571+00:00", "level": "WARNING", "logger": "aiorbit.discovery.pagination", "message": "listing page blocked by bot challenge", "url": "https://theresanaiforthat.com/tools"}
+{"ts": "2026-09-15T18:59:26.601563+00:00", "level": "WARNING", "logger": "aiorbit.discovery.pagination", "message": "listing page blocked by bot challenge", "url": "https://theresanaiforthat.com/tools"}
+{"ts": "2026-09-15T18:59:26.602495+00:00", "level": "INFO", "logger": "aiorbit.discovery.taaft", "message": "no cards parsed on listing page", "source": "taaft", "url": "https://theresanaiforthat.com/tools"}

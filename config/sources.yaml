@@ -1,0 +1,244 @@
+# Discovery-source registry.
+#
+# Every source listed here comes from "AI Tools: Data Extraction & Curation
+# Guidelines" §2. No source is invented, and no source URL is used that is not
+# named in that document.
+#
+# Roles:
+#   discovery    - used to FIND candidate tools
+#   cross_check  - used to corroborate facts found elsewhere
+#   enrichment   - used to add adoption signals / metadata
+#   verification - authoritative (official product website)
+#
+# tier 1 = "primary sources ... reviewed systematically first" (§2)
+# tier 2 = "additional sources ... for discovery, cross-checking and enrichment"
+#
+# `enabled: false` on a source means no adapter is implemented yet. Run #1
+# implements the registry + config only; adapters are added incrementally
+# without touching the rest of the pipeline.
+
+version: 1
+
+defaults:
+  rate_limit_rps: 0.5
+  respect_robots_txt: true
+  access: html          # html | api | rss
+  roles: [discovery]
+
+sources:
+  # ------------------------------------------------------------ tier 1
+  - key: taaft
+    name: "There's An AI For That"
+    homepage: https://theresanaiforthat.com/
+    listing_url: https://theresanaiforthat.com/tools/
+    tier: 1
+    roles: [discovery, enrichment]
+    access: html
+    trust: 0.8
+    rate_limit_rps: 0.3
+    enabled: true
+    max_pages: 3
+    notes: >
+      Primary discovery source. Provides name, tagline, category, outbound
+      official link and save/upvote counts usable as adoption signals.
+      ACCESS CAVEAT (verified 2026-09-15): the site is behind a Cloudflare
+      browser challenge, so plain HTTP requests return 403 "Just a moment..."
+      and /sitemap.xml is blocked too. The adapter detects the challenge and
+      yields zero candidates with stop_reason="bot_challenge" rather than
+      inventing data. Parsing is fixture-tested and becomes productive as soon
+      as an authorised access path (API key / partner feed / operator-supplied
+      HTML cache) is available.
+    # Selectors may be overridden per deployment without a code change:
+    # selectors:
+    #   card: ["div.ai"]
+    #   name: ["a.taaft_title"]
+
+  - key: creati
+    name: Creati.ai
+    homepage: https://creati.ai/
+    listing_url: https://creati.ai/ai-tools/
+    tier: 1
+    roles: [discovery, enrichment]
+    access: html
+    trust: 0.7
+    rate_limit_rps: 0.3
+    enabled: true
+    # Category listings provide breadth; ?page=N echoes page 1 on this site, so
+    # the paginator's repeated-content guard stops numeric walks by design.
+    max_categories: 8
+    notes: >
+      Primary discovery source. Two card layouts are handled: the grid cards on
+      /ai-tools/ and the list cards on /ai-tools/categories/<slug>/. Visible
+      ratings/counters are stored as raw unverified observations only.
+
+  # ------------------------------------------------------------ tier 2
+  - key: toolpilot
+    name: ToolPilot.ai
+    homepage: https://toolpilot.ai/
+    tier: 2
+    roles: [discovery, cross_check]
+    trust: 0.5
+    enabled: false
+
+  - key: futurepedia
+    name: Futurepedia
+    homepage: https://www.futurepedia.io/
+    tier: 2
+    roles: [discovery, cross_check, enrichment]
+    trust: 0.65
+    enabled: false
+
+  - key: dang
+    name: Dang.ai
+    homepage: https://dang.ai/
+    tier: 2
+    roles: [discovery, cross_check]
+    trust: 0.5
+    enabled: false
+
+  - key: opentools
+    name: OpenTools.ai
+    homepage: https://opentools.ai/
+    tier: 2
+    roles: [discovery, cross_check]
+    trust: 0.55
+    enabled: false
+
+  - key: topai
+    name: TopAI.tools
+    homepage: https://topai.tools/
+    tier: 2
+    roles: [discovery, enrichment]
+    trust: 0.55
+    enabled: false
+
+  - key: poweredbyai
+    name: PoweredByAI.app
+    homepage: https://poweredbyai.app/
+    tier: 2
+    roles: [discovery]
+    trust: 0.45
+    enabled: false
+
+  - key: aivalley
+    name: AI Valley
+    homepage: https://aivalley.ai/
+    tier: 2
+    roles: [discovery, cross_check]
+    trust: 0.5
+    enabled: false
+
+  - key: easywithai
+    name: EasyWithAI
+    homepage: https://easywithai.com/
+    tier: 2
+    roles: [discovery, cross_check]
+    trust: 0.5
+    enabled: false
+
+  - key: foundr
+    name: Foundr.ai
+    homepage: https://foundr.ai/
+    tier: 2
+    roles: [discovery]
+    trust: 0.45
+    enabled: false
+
+  - key: rankmyai
+    name: RankMyAI
+    homepage: https://rankmyai.com/
+    tier: 2
+    roles: [discovery, enrichment]
+    trust: 0.45
+    enabled: false
+
+  - key: aipure
+    name: AIPURE
+    homepage: https://aipure.ai/
+    tier: 2
+    roles: [discovery, enrichment]
+    trust: 0.5
+    enabled: false
+
+  - key: aitoolnet
+    name: AIToolNet
+    homepage: https://www.aitoolnet.com/
+    tier: 2
+    roles: [discovery, cross_check]
+    trust: 0.45
+    enabled: false
+
+  - key: aichief
+    name: AIChief
+    homepage: https://aichief.com/
+    tier: 2
+    roles: [discovery, cross_check]
+    trust: 0.45
+    enabled: false
+
+  - key: aixploria
+    name: Aixploria
+    homepage: https://www.aixploria.com/en/
+    tier: 2
+    roles: [discovery, cross_check]
+    trust: 0.45
+    enabled: false
+
+  - key: rundown_ai
+    name: The Rundown AI
+    homepage: https://www.rundown.ai/
+    tier: 2
+    roles: [discovery, cross_check]
+    access: rss
+    trust: 0.6
+    enabled: false
+    notes: Newsletter/publication — good recency and momentum signal.
+
+  - key: producthunt
+    name: Product Hunt
+    homepage: https://www.producthunt.com/
+    tier: 2
+    roles: [discovery, enrichment]
+    access: api
+    trust: 0.75
+    enabled: false
+    notes: >
+      GraphQL API (PRODUCT_HUNT_TOKEN). API-first per technical spec §8
+      ("Intelligent use of APIs over brute-force scraping"). Supplies launch
+      dates and upvote counts as verified adoption signals.
+
+  # ------------------------------------------------- verification / enrichment
+  - key: official_site
+    name: Official product website
+    tier: 0
+    roles: [verification, enrichment]
+    access: html
+    trust: 1.0
+    enabled: false
+    notes: >
+      Authoritative source per guideline §10 ("Directories are for discovery.
+      The official product website is the primary source for verification.").
+      On conflict, this source always wins.
+
+  - key: github
+    name: GitHub
+    homepage: https://github.com/
+    tier: 2
+    roles: [enrichment, cross_check]
+    access: api
+    trust: 0.9
+    enabled: false
+    notes: >
+      REST API (GITHUB_TOKEN). Used ONLY to enrich a tool's open-source status,
+      stars and last-commit activity. The Repositories module is owned by the
+      company and is out of scope for this module.
+
+  - key: huggingface
+    name: Hugging Face
+    homepage: https://huggingface.co/
+    tier: 2
+    roles: [enrichment, cross_check]
+    access: api
+    trust: 0.85
+    enabled: false
+    notes: Model/provider enrichment for tools that publish their own models.

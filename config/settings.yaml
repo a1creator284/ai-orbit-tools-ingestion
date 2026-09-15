@@ -1,0 +1,73 @@
+# AI Orbit — Tools ingestion pipeline settings (non-secret).
+# Secrets and per-run overrides belong in .env (see .env.example).
+
+environment: development
+
+# Run #1 is foundation-only: dry_run prevents any bulk network discovery.
+dry_run: true
+log_level: INFO
+
+paths:
+  raw: data/raw
+  interim: data/interim
+  processed: data/processed
+  final: data/final
+  cache: .cache
+  logs: logs
+
+http:
+  user_agent: "AIOrbitBot/0.1 (+https://aiorbit.ai; data-ingestion)"
+  timeout_seconds: 20.0
+  max_retries: 3
+  backoff_factor: 1.5
+  # Deliberately polite: directories are discovery sources, not targets to hammer.
+  default_rate_limit_rps: 0.5
+  respect_robots_txt: true
+  cache_enabled: true
+  cache_ttl_hours: 72
+  verify_tls: true
+
+# Weights are verbatim from "AI Tools: Data Extraction & Curation Guidelines" §5.
+# They must sum to 100 (enforced in src/core/config.py).
+scoring:
+  weights:
+    product_quality_capability: 25
+    real_user_value: 20
+    current_usage_adoption: 15
+    activity_maintenance: 15
+    product_maturity_reliability: 10
+    recency_momentum: 5
+    differentiation: 5
+    information_quality_verifiability: 5
+  bands:
+    exceptional: 90
+    excellent: 80
+    good: 70
+    average: 60
+  reject_below: 60
+  # 70+ = "Good — include selectively"; below that the guideline says skip.
+  include_at_or_above: 70
+
+dedup:
+  name_similarity_threshold: 0.88
+  review_similarity_threshold: 0.78
+  domain_match_is_authoritative: true
+
+batch:
+  batch_number: 1
+  target_size: 1000
+  allow_under_target: true       # "If only 800 tools qualify, submit 800."
+  long_term_target: 50000
+  subsequent_batch_size: 5000
+  max_per_primary_task: 60       # prevents 100 AI writing tools dominating batch 1
+
+llm:
+  # LLM is used ONLY for editorial descriptions/verdicts built from verified
+  # facts. It must never be used to invent factual fields.
+  enabled: false
+  provider: openai
+  model: gpt-4o-mini
+  api_key_env: OPENAI_API_KEY
+  base_url_env: OPENAI_BASE_URL
+  max_output_tokens: 700
+  temperature: 0.2
