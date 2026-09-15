@@ -216,6 +216,48 @@ class HttpClient:
         self._robots: dict[str, urllib.robotparser.RobotFileParser | None] = {}
 
     # ----------------------------------------------------------- robots.txt
+    def _fetch_robots(self, origin: str) -> urllib.robotparser.RobotFileParser | None:
+        """Read ``origin/robots.txt`` through *our own* session.
+
+        ``RobotFileParser.read()`` is deliberately **not** used: it fetches via
+        ``urllib`` with the default ``Python-urllib/x.y`` user agent, which many
+        CDNs answer with 403. ``read()`` swallows that error and sets
+        ``disallow_all = True``, so a site whose robots.txt actually says
+        ``Allow: /`` silently becomes "crawling forbidden" and no request is
+        ever attempted. Fetching with the configured user agent (the same one
+        the rules are then evaluated against) is both more accurate and more
+        honest.
+
+        Returns ``None`` when the rules could not be established, which callers
+        treat as "no restriction found" — the long-standing documented intent
+        of "unreachable robots => allow". A 4xx (including 401/403/404) means
+        no usable rules exist; RFC 9309 says 4xx implies unrestricted access.
+        """
+        try:
+            response = self.session.get(
+                f"{origin}/robots.txt",
+                timeout=self.config.timeout_seconds,
+                allow_redirects=True,
+                verify=self.config.verify_tls,
+            )
+        except requests.RequestException as exc:
+            logger.debug("robots.txt unreachable", extra={"origin": origin, "error": str(exc)})
+            return None
+
+        status = response.status_code
+        if status >= 500 or 400 <= status < 500:
+            # 4xx: no rules published -> unrestricted. 5xx: server trouble, and
+            # we must not invent a prohibition the site never expressed.
+            logger.debug("robots.txt not usable", extra={"origin": origin, "status": status})
+            return None
+
+        parser = urllib.robotparser.RobotFileParser()
+        try:
+            parser.parse((response.text or "").splitlines())
+        except Exception:  # noqa: BLE001 - unparseable robots => no rules found
+            return None
+        return parser
+
     def _robots_allows(self, url: str) -> bool:
         if not self.config.respect_robots_txt:
             return True
@@ -223,12 +265,7 @@ class HttpClient:
         origin = f"{parts.scheme}://{parts.netloc}"
         parser = self._robots.get(origin, "missing")  # type: ignore[arg-type]
         if parser == "missing":
-            parser = urllib.robotparser.RobotFileParser()
-            parser.set_url(f"{origin}/robots.txt")
-            try:
-                parser.read()
-            except Exception:  # noqa: BLE001 - unreachable robots => allow
-                parser = None
+            parser = self._fetch_robots(origin)
             self._robots[origin] = parser
         if parser is None:
             return True

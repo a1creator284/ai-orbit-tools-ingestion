@@ -1,24 +1,25 @@
 {
-  "started_at": "2026-09-15T20:23:54.449491+00:00",
-  "finished_at": "2026-09-15T20:23:54.450424+00:00",
-  "input": 15,
-  "fetched": 0,
-  "verified": 0,
-  "partially_verified": 0,
+  "started_at": "2026-09-15T20:33:22.654720+00:00",
+  "finished_at": "2026-09-15T20:33:29.848603+00:00",
+  "input": 10,
+  "fetched": 10,
+  "verified": 9,
+  "partially_verified": 1,
   "unverified": 0,
-  "unreachable": 15,
+  "unreachable": 0,
   "failed": 0,
-  "needs_review": 15,
+  "needs_review": 1,
   "status_counts": {
-    "unreachable": 15
+    "partially_verified": 1,
+    "verified": 9
   },
   "failure_counts": {
-    "fetch_failed": 15
+    "no_product_signal": 1
   },
-  "live": false,
-  "limit": 15,
+  "live": true,
+  "limit": 10,
   "input_candidates": 200,
-  "considered": 15,
+  "considered": 10,
   "artefacts": {
     "verified_candidates": "/home/user/webapp/data/interim/candidates_verified.jsonl"
   }

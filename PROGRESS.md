@@ -204,6 +204,99 @@ verbatim — this unit is wiring, persistence and safety gating only.
 
 ---
 
+### Run #7 — first live verification spot check (this run)
+
+**Unit 7.1 — live spot check + robots.txt transport fix**
+
+The first contact with the live web. Command, run exactly twice (before and
+after the fix), never widened:
+
+```
+python run.py verify --live --limit 10
+```
+
+> **Live-web observations below are not test results.** Everything in this
+> subsection describes what 10 real websites did on 2026-09-15. Live results are
+> inherently non-reproducible: sites change, CDNs behave differently per IP and
+> per UA. Deterministic guarantees come only from the offline suite (see
+> **Tests**), which is why the fix below is pinned by offline fixtures rather
+> than by re-running the live pass.
+
+**Live pass A — before the fix** (10 attempted, **4 actually fetched**):
+
+| | |
+|---|---|
+| `status_counts` | `verified: 4`, `unreachable: 6` |
+| `failure_counts` | `fetch_failed: 6` |
+
+Classification of the 6 failures — **none** were genuine dead, parked or
+inaccessible product sites. All 6 answered `HTTP 200` when checked
+independently with `curl`, in under 3 s. No `thin_content`, no `bot_challenge`,
+no redirect/off-domain issue, and no genuine identity or product-signal failure
+was involved. That mismatch — "did not respond" for a site that answers 200 —
+is what made this a bug rather than live-web noise.
+
+**Genuine reproducible bug found (transport layer, not verification policy).**
+Root cause in `src/core/http_client.HttpClient._robots_allows`: it used
+`urllib.robotparser.RobotFileParser.read()`, which fetches `robots.txt` with
+the default `Python-urllib/x.y` user agent. Those hosts' CDNs answer that UA
+with **403**; `read()` swallows the error and sets `disallow_all = True`. So:
+
+* the client refused to send the request at all (0 entries parsed,
+  `can_fetch() == False`), even though each site's real `robots.txt` contains
+  `Allow: /` — confirmed by re-fetching it with our own UA, where
+  `can_fetch()` returns `True` for every one of the 6;
+* `fetch()` raised `blocked by robots.txt`, `try_fetch()` degraded to `None`,
+  and the verifier — which cannot distinguish *why* a fetch returned nothing —
+  recorded `fetch_failed` with the reason *"official website did not respond
+  (timeout/network failure after retries)"*. **That reason was factually
+  false**: no network failure and no timeout ever happened, and the ~50 ms
+  per-candidate failure time proved it (three retries with backoff cannot
+  complete that fast);
+* it also contradicted the function's own documented intent,
+  `unreachable robots => allow`.
+
+Fix — the smallest one that addresses the cause, in the transport layer only:
+new `HttpClient._fetch_robots()` reads `robots.txt` through the client's **own
+session** (same UA the rules are then evaluated against) and treats a response
+that carries no usable rules (4xx/5xx, network error, unparseable) as *no
+restriction found* rather than as a site-wide prohibition — 4xx meaning
+unrestricted access is also what RFC 9309 specifies.
+
+**No verification decision rule was changed.** `src/verification/verifier.py`
+is untouched: `_decide`, the evidence extraction, the identity and
+product-affordance rules and every `VerificationFailure` code are byte-for-byte
+as they were. `thin_content`, `bot_challenge`, CDN behaviour and temporary
+network problems were explicitly *not* treated as evidence that the verifier is
+wrong — and in fact none of them occurred in this pass.
+
+**Live pass B — after the fix** (10 attempted, **10 actually fetched**):
+
+| | |
+|---|---|
+| `status_counts` | `verified: 9`, `partially_verified: 1` |
+| `failure_counts` | `no_product_signal: 1` |
+
+`unreachable`, `unverified` and `failed` all dropped to 0; `needs_review` fell
+from 6 to 1. The 9 verified records each earned identity evidence from a
+page-level brand slot plus at least one same-site affordance actually present
+on the page (`pricing_link`, `signup_link`, `login_link`, `docs_link`,
+`app_link`, `download_link`).
+
+The single remaining failure was **inspected and judged correct, not a bug**:
+`imagetoprompt.org` returns `HTTP 200` with strong identity (7 signals) but its
+landing page's only affordance-shaped link points **off-site**
+(`minmail.app`) — verified by hand against the live HTML. Off-site links are
+deliberately not evidence, so identity-without-affordance correctly yields
+`partially_verified` + review instead of `verified`. Conservative under-claiming
+is the intended behaviour.
+
+Not done, by design: no wider run (`--limit` stayed at 10), no TAAFT/Creati
+crawling, no directory URL used as a substitute verification URL, and no
+relaxation of a verification rule to make a difficult live page pass.
+
+---
+
 ## Tests
 
 | Suite | Count |
@@ -212,7 +305,25 @@ verbatim — this unit is wiring, persistence and safety gating only.
 | After Unit 4.1 (`tests/test_candidate_store.py`, +18) | 93 passed |
 | After Units 4.2 + 4.3 (`test_candidate_prepare.py` +28, `test_logging_setup.py` +6) | 127 passed |
 | After Unit 5.1 (`tests/test_verification_official_site.py`, +41) | 168 passed |
-| After Unit 6.1 (`tests/test_verification_pipeline_wiring.py`, +38) | **206 passed** |
+| After Unit 6.1 (`tests/test_verification_pipeline_wiring.py`, +38) | 206 passed |
+| After Unit 7.1 (`tests/test_http_robots.py`, +15) | **221 passed** |
+
+**Run #7 deterministic results** (as opposed to the live observations above):
+the robots.txt bug is pinned by 15 new offline tests in
+`tests/test_http_robots.py`, driven by a `FakeSession` and the captured
+`tests/fixtures/robots_allow_root.txt` (a real-world `Allow: /` file from one
+of the sites that was wrongly skipped). No sockets, fully reproducible.
+
+They cover the bug itself (a 403 on `robots.txt` no longer blocks the page
+request; `robots.txt` is fetched with the configured UA, asserted not to be a
+`urllib` UA; `Allow: /` permits the landing page) and — just as important —
+that compliance was **not** weakened: a real `Disallow: /api/` rule still
+blocks and sends no request, a site-wide `Disallow: /` still blocks,
+`respect_robots_txt: false` skips the lookup entirely, rules are fetched once
+per origin, 401/404/410/500/503, network errors, empty and unparseable
+`robots.txt` all mean "no restriction found", and a blocked URL still degrades
+to `None` rather than to a fabricated response — so a genuinely disallowed page
+can never reach the verifier as evidence.
 
 Offline smoke check against the existing `data/raw/discovery/` artefacts
 (200 real candidates): 200 loaded / 0 skipped, 200 prepared / 0 rejected,
@@ -272,17 +383,31 @@ cleanly. No network access, no live directory calls.
 * Run #4 checkpoint: `96361eb`
 * Run #5 Unit 5.1: official-website verification
 * Run #5 checkpoint: `74cd440`
-* Run #6 Unit 6.1: persist + wire official-site verification (this commit)
+* Run #6 Unit 6.1: persist + wire official-site verification
+* Run #6 checkpoint: `16cb0af`
+* Run #7 Unit 7.1: first live verification spot check + robots.txt transport
+  fix (this commit). `data/interim/candidates_verified.jsonl` and
+  `candidates_verification_report.json` are committed as the preserved
+  evidence of live pass B (`live: true` on every row).
 
 ---
 
 ## Known limitations
 
-* Official-website verification is now wired, persisted and CLI-accessible, but
-  has **still not been run against live websites**. Every pass so far was
-  offline, so `data/interim/candidates_verified.jsonl` currently contains only
-  `unreachable`/`failed` rows with `live: false`. The first live pass should be
-  `python run.py verify --live --limit 10`.
+* Official-website verification has now been run live **exactly once, over 10
+  candidates** (Run #7). The stored artefacts are that 10-row spot check, not a
+  full dataset: 190 of the 200 prepared candidates have never been verified.
+  Widening (`--limit 50`, then `200`) is the next calibration step.
+* A 10-site sample is too small to conclude the decision rules are correctly
+  calibrated. Notably **zero** `thin_content`, `bot_challenge`,
+  `off_domain_redirect` and `dead_site_marker` outcomes occurred, so those
+  branches still have no live evidence behind them — only offline fixtures.
+  Expect JS-rendered landing pages and CDN challenges to appear at larger
+  limits; per the rule above, those are not by themselves proof that the
+  verifier is wrong.
+* The robots.txt fix means the crawler now reaches sites it previously skipped,
+  so **live pass A's 6 `fetch_failed` results should not be cited as evidence
+  about those products** — they were an artefact of our own client.
 * The `Tool`-level `ToolsPipeline.verify` stage still skips while
   `dry_run: true`; candidate-level verification (`verify_candidates`) is the
   wired stage. Feeding verified candidate evidence into the normalized `Tool`
@@ -301,20 +426,23 @@ cleanly. No network access, no live directory calls.
 
 ## Exact next recommended step
 
-**Run the first live verification spot check, then calibrate.** Specifically:
+**Widen the live verification pass to `--limit 50`, then calibrate.** The
+10-candidate spot check is done (Run #7) and the transport bug it exposed is
+fixed, so the next pass is about *volume of evidence*, not new machinery:
 
-1. run `python run.py verify --live --limit 10` — a small, deliberate spot
-   check against 10 real official websites. Nothing about the decision rules
-   should be changed before this data exists;
-2. read `data/interim/candidates_verification_report.json` and inspect the
-   `failure_counts` / `status_counts`. The purpose of the spot check is to find
-   out which failures are *real* (dead sites, parked domains) and which are
-   artefacts of the verifier meeting the live web for the first time (e.g.
-   JS-rendered landing pages producing `thin_content`, or CDN challenges
-   producing `bot_challenge`). Only a failure reproduced on a real page
-   justifies touching `_decide`;
-3. widen gradually (`--limit 50`, then `--limit 200`) once the spot check looks
-   sane, keeping every pass under an explicit limit — still no bulk crawl;
+1. run `python run.py verify --live --limit 50` and read the report the same
+   way: classify each failure as genuine (dead/parked/no product) or as an
+   artefact of meeting the live web (JS-rendered `thin_content`, CDN
+   `bot_challenge`). Only a failure reproduced on a real page, with evidence
+   that the *rule* is wrong, justifies touching `_decide`;
+2. pay particular attention to the branches the 10-site sample never exercised
+   (`thin_content`, `bot_challenge`, `off_domain_redirect`,
+   `dead_site_marker`), and to whether `partially_verified` stays a small
+   minority — a large share would suggest the product-affordance rule is too
+   narrow for JS-rendered landing pages, which *would* be a real calibration
+   finding;
+3. then widen to `--limit 200`, keeping every pass under an explicit limit —
+   still no bulk crawl;
 4. then feed verified candidate evidence into the normalized `Tool` records, so
    `verification_status`, `last_verified_date` and the official `SourceRef`
    reach the records that scoring and validation consume;
