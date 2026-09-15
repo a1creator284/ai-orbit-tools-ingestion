@@ -1,0 +1,155 @@
+{
+  "started_at": "2026-09-15T17:58:13.952037+00:00",
+  "finished_at": "2026-09-15T17:58:13.952985+00:00",
+  "dry_run": true,
+  "batch_number": 1,
+  "selected_count": 0,
+  "rejected_count": 0,
+  "review_count": 0,
+  "relationship_count": 0,
+  "stages": [
+    {
+      "stage": "discovery",
+      "input": 0,
+      "output": 0,
+      "dropped": 0,
+      "errors": 0,
+      "started_at": "2026-09-15T17:58:13.952445+00:00",
+      "finished_at": "2026-09-15T17:58:13.952580+00:00",
+      "details": {
+        "warning": "no discovery adapters are enabled/implemented; configured sources: 21"
+      }
+    },
+    {
+      "stage": "normalization",
+      "input": 0,
+      "output": 0,
+      "dropped": 0,
+      "errors": 0,
+      "started_at": "2026-09-15T17:58:13.952589+00:00",
+      "finished_at": "2026-09-15T17:58:13.952592+00:00",
+      "details": {}
+    },
+    {
+      "stage": "verification",
+      "input": 0,
+      "output": 0,
+      "dropped": 0,
+      "errors": 0,
+      "started_at": "2026-09-15T17:58:13.952597+00:00",
+      "finished_at": "2026-09-15T17:58:13.952601+00:00",
+      "details": {
+        "skipped": "dry_run enabled: official-website verification skipped"
+      }
+    },
+    {
+      "stage": "quality_filter",
+      "input": 0,
+      "output": 0,
+      "dropped": 0,
+      "errors": 0,
+      "started_at": "2026-09-15T17:58:13.952606+00:00",
+      "finished_at": "2026-09-15T17:58:13.952610+00:00",
+      "details": {
+        "rejection_reasons": {}
+      }
+    },
+    {
+      "stage": "deduplication",
+      "input": 0,
+      "output": 0,
+      "dropped": 0,
+      "errors": 0,
+      "started_at": "2026-09-15T17:58:13.952614+00:00",
+      "finished_at": "2026-09-15T17:58:13.952630+00:00",
+      "details": {
+        "input_count": 0,
+        "output_count": 0,
+        "merged_count": 0,
+        "comparisons": 0,
+        "review_pair_count": 0,
+        "review_pairs": [],
+        "multi_record_clusters": {}
+      }
+    },
+    {
+      "stage": "scoring",
+      "input": 0,
+      "output": 0,
+      "dropped": 0,
+      "errors": 0,
+      "started_at": "2026-09-15T17:58:13.952635+00:00",
+      "finished_at": "2026-09-15T17:58:13.952638+00:00",
+      "details": {
+        "bands": {}
+      }
+    },
+    {
+      "stage": "enrichment",
+      "input": 0,
+      "output": 0,
+      "dropped": 0,
+      "errors": 0,
+      "started_at": "2026-09-15T17:58:13.952642+00:00",
+      "finished_at": "2026-09-15T17:58:13.952646+00:00",
+      "details": {
+        "skipped": "no enrichers registered"
+      }
+    },
+    {
+      "stage": "validation",
+      "input": 0,
+      "output": 0,
+      "dropped": 0,
+      "errors": 0,
+      "started_at": "2026-09-15T17:58:13.952650+00:00",
+      "finished_at": "2026-09-15T17:58:13.952768+00:00",
+      "details": {
+        "total": 0,
+        "publishable": 0,
+        "blocked": 0,
+        "issues_by_rule": {}
+      }
+    },
+    {
+      "stage": "selection",
+      "input": 0,
+      "output": 0,
+      "dropped": 0,
+      "errors": 0,
+      "started_at": "2026-09-15T17:58:13.952775+00:00",
+      "finished_at": "2026-09-15T17:58:13.952890+00:00",
+      "details": {
+        "target_size": 1000,
+        "under_target": "only 0 tools met the quality threshold (target 1000); the batch is NOT padded — guideline §11"
+      }
+    },
+    {
+      "stage": "relationships",
+      "input": 0,
+      "output": 0,
+      "dropped": 0,
+      "errors": 0,
+      "started_at": "2026-09-15T17:58:13.952896+00:00",
+      "finished_at": "2026-09-15T17:58:13.952979+00:00",
+      "details": {
+        "by_type": {}
+      }
+    }
+  ],
+  "artefacts": {
+    "raw_candidates": "/home/user/webapp/data/raw/candidates.jsonl",
+    "processed_tools": "/home/user/webapp/data/processed/tools.jsonl",
+    "final_tools": "/home/user/webapp/data/final/tools.json",
+    "relationships": "/home/user/webapp/data/final/relationships.json",
+    "rejected": "/home/user/webapp/data/processed/rejected.jsonl",
+    "review_queue": "/home/user/webapp/data/processed/review_queue.jsonl",
+    "validation": "/home/user/webapp/data/processed/validation.json",
+    "run_report": "/home/user/webapp/data/final/run_report.json"
+  },
+  "notes": [
+    "no discovery adapters are enabled/implemented; configured sources: 21",
+    "dry_run enabled: official-website verification skipped",
+    "only 0 tools met the quality threshold (target 1000); the batch is NOT padded — guideline §11"
+  ]
+}

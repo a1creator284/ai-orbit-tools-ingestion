@@ -1,0 +1,31 @@
+<html><body>
+<ul class="grid-container">
+  <!-- card with no name and no links: must be dropped -->
+  <div class="cardContainer">
+    <div class="w-11/12"><div class="description">Some description only.</div></div>
+  </div>
+
+  <!-- card with a name but no links at all: must be dropped -->
+  <div class="cardContainer">
+    <h3><a title="Nameless Nowhere">Nameless Nowhere</a></h3>
+  </div>
+
+  <!-- card with only an internal detail link (no outbound website) -->
+  <div class="cardContainer">
+    <h3><a href="/ai-tools/internal-only/" title="Internal Only Tool">Internal Only Tool</a></h3>
+  </div>
+
+  <!-- unclosed tags + missing tagline, outbound link with tracking params -->
+  <div class="cardContainer">
+    <h3><a href="https://halfbroken.example/?utm_source=creati.ai&amp;ref=x" title="Half Broken">Half Broken
+    <div class="category-tag-container">
+      <a class="category-tag" href="/ai-tools/categories/ai-writing/" title="AI Writing"><div>AI Writing</div></a>
+  </div>
+
+  <!-- image/CDN link only: not a website -->
+  <div class="cardContainer">
+    <h3><a title="Asset Only">Asset Only</a></h3>
+    <a href="https://cdn-image.creati.ai/image/logo.webp"><img alt="Asset Only"/></a>
+  </div>
+</ul>
+</body></html>
