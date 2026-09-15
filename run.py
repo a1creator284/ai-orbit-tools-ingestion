@@ -8,6 +8,8 @@ Usage examples::
     python run.py selfcheck               # foundation sanity checks (no network)
     python run.py discover --limit 50     # discovery only, stores raw candidates
     python run.py prepare                 # prepare stored candidates (no network)
+    python run.py verify                  # wiring/offline check, makes NO network calls
+    python run.py verify --live --limit 10  # small real official-site spot check
     python run.py run --dry-run           # full pipeline, no network discovery
     python run.py score --input data/processed/tools.jsonl
 
@@ -135,7 +137,9 @@ def cmd_run(args: argparse.Namespace) -> int:
         settings.batch.target_size = args.target
 
     pipeline = ToolsPipeline(settings)
-    report = pipeline.run(limit_per_source=args.limit)
+    report = pipeline.run(
+        limit_per_source=args.limit, verify_limit=args.verify_limit
+    )
     print(json.dumps(report.to_dict(), indent=2))
     if report.selected_count == 0:
         print(
@@ -229,6 +233,79 @@ def cmd_prepare(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_verify(args: argparse.Namespace) -> int:
+    """Verify prepared candidates against their official websites.
+
+    Reads ``data/interim/candidates_prepared.jsonl`` (falling back to
+    preparing the stored discovery artefacts when it is absent), runs the
+    official-site verifier, and writes
+    ``data/interim/candidates_verified.jsonl`` plus a verification report.
+
+    Network access is **opt-in**: without ``--live`` the stage runs through an
+    offline HTTP client and makes no network calls at all, which is how the
+    wiring is exercised safely. Use ``--limit`` to keep the first live pass a
+    small spot check (10–20 candidates) rather than a bulk crawl.
+    """
+    from src.candidates.prepare import INTERIM_FILENAME, CandidatePreparer
+    from src.candidates.store import load_discovery_dir
+    from src.verification.store import load_prepared_candidates
+
+    settings = get_settings(reload=True)
+    settings.paths.ensure()
+
+    interim = settings.paths.resolve("interim")
+    prepared, source = load_prepared_candidates(interim / INTERIM_FILENAME)
+    if not prepared:
+        # No prepared artefact yet: prepare the stored discovery candidates in
+        # memory rather than asking the user to re-run a previous stage.
+        candidates, _ = load_discovery_dir(settings.paths.resolve("raw"))
+        prepared, _rejected, _report = CandidatePreparer().prepare_many(candidates)
+        source = "data/raw/discovery/ (prepared in memory)"
+
+    if not prepared:
+        print(json.dumps({"prepared_candidates": 0, "verified": 0}, indent=2))
+        print(
+            "\nNo prepared candidates found. Run `python run.py discover` and "
+            "`python run.py prepare` first — nothing is fabricated when there "
+            "is no input.",
+            file=sys.stderr,
+        )
+        return 1
+
+    pipeline = ToolsPipeline(settings)
+    _results, report = pipeline.verify_candidates(
+        prepared,
+        live=args.live,
+        limit=args.limit,
+        persist=not args.no_persist,
+    )
+
+    stage = pipeline.report.stage("verify_candidates")
+    print(
+        json.dumps(
+            {
+                "input_source": source,
+                "prepared_candidates": len(prepared),
+                "live": args.live,
+                "limit": args.limit,
+                "considered": stage.details.get("considered"),
+                "with_official_url": stage.details.get("with_official_url"),
+                "report": report.to_dict(),
+                "artefacts": stage.details.get("artefacts", {}),
+            },
+            indent=2,
+        )
+    )
+    if not args.live:
+        print(
+            "\nOffline pass: no network calls were made, so nothing could be "
+            "verified from real page evidence. Re-run with `--live --limit 10` "
+            "for a small real spot check.",
+            file=sys.stderr,
+        )
+    return 0
+
+
 def cmd_score(args: argparse.Namespace) -> int:
     """Re-score and re-rank an existing processed dataset."""
     settings = get_settings()
@@ -305,6 +382,12 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--live", action="store_true", help="allow network verification")
     run_parser.add_argument("--limit", type=int, default=None, help="max candidates per source")
     run_parser.add_argument("--target", type=int, default=None, help="override batch target size")
+    run_parser.add_argument(
+        "--verify-limit",
+        type=int,
+        default=None,
+        help="max candidates sent to official-site verification",
+    )
     run_parser.set_defaults(func=cmd_run)
 
     discover_parser = sub.add_parser(
@@ -338,6 +421,34 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-persist", action="store_true", help="do not write artefacts"
     )
     prepare_parser.set_defaults(func=cmd_prepare)
+
+    verify_parser = sub.add_parser(
+        "verify",
+        help="verify prepared candidates against their official websites",
+        description=(
+            "Official-website verification. Offline by default: pass --live to "
+            "allow real network calls, and keep the first live pass small with "
+            "--limit 10."
+        ),
+    )
+    verify_parser.add_argument(
+        "--live",
+        action="store_true",
+        help=(
+            "REQUIRED for real network verification; without it the stage runs "
+            "fully offline and makes no network calls"
+        ),
+    )
+    verify_parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="max candidates to verify (use 10-20 for the first live spot check)",
+    )
+    verify_parser.add_argument(
+        "--no-persist", action="store_true", help="do not write artefacts"
+    )
+    verify_parser.set_defaults(func=cmd_verify)
 
     score_parser = sub.add_parser("score", help="re-score an existing dataset")
     score_parser.add_argument("--input", default="data/processed/tools.jsonl")

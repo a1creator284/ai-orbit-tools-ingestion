@@ -141,6 +141,49 @@ class ResponseCache:
             logger.warning("cache write failed: %s", exc)
 
 
+class OfflineHttpClient:
+    """An :class:`HttpClient`-shaped client that **never touches the network**.
+
+    Every stage that can reach out to the internet must be explicitly opted
+    into (``--live``). Rather than sprinkling ``if live:`` branches through the
+    stages — which is exactly how an accidental crawl happens — the *client* is
+    swapped for this one, so "offline" is enforced at the only place that could
+    ever open a socket.
+
+    ``try_fetch`` returns ``None``, which is the real client's documented
+    graceful-degradation contract: callers already treat it as "nothing was
+    learned about this URL", never as evidence. Attempted URLs are recorded so
+    a dry run can still prove *which* URLs a live run would have fetched (and,
+    just as importantly, which it would not).
+    """
+
+    def __init__(self) -> None:
+        #: Every URL a live run would have fetched, in order.
+        self.attempts: list[str] = []
+        self.limiter = RateLimiter(100.0)
+
+    def try_fetch(self, url: str, **_: Any) -> None:
+        self.attempts.append(url)
+        logger.debug("offline client: fetch suppressed", extra={"url": url})
+        return None
+
+    def fetch(self, url: str, **kwargs: Any) -> FetchResult:
+        self.try_fetch(url, **kwargs)
+        raise FetchError(f"offline mode: refusing to fetch {url}", url=url)
+
+    def head(self, url: str, **kwargs: Any) -> None:
+        return self.try_fetch(url, **kwargs)
+
+    def close(self) -> None:
+        return None
+
+    def __enter__(self) -> "OfflineHttpClient":
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
+
+
 class HttpClient:
     """Polite, retrying, caching HTTP client."""
 

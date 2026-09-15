@@ -1,0 +1,25 @@
+{
+  "started_at": "2026-09-15T20:23:54.449491+00:00",
+  "finished_at": "2026-09-15T20:23:54.450424+00:00",
+  "input": 15,
+  "fetched": 0,
+  "verified": 0,
+  "partially_verified": 0,
+  "unverified": 0,
+  "unreachable": 15,
+  "failed": 0,
+  "needs_review": 15,
+  "status_counts": {
+    "unreachable": 15
+  },
+  "failure_counts": {
+    "fetch_failed": 15
+  },
+  "live": false,
+  "limit": 15,
+  "input_candidates": 200,
+  "considered": 15,
+  "artefacts": {
+    "verified_candidates": "/home/user/webapp/data/interim/candidates_verified.jsonl"
+  }
+}

@@ -6,6 +6,7 @@ website → Verify → Enrich → Deduplicate → Curate")::
     discovery
       → extraction
       → candidate preparation  (normalize + validate identity, still unverified)
+      → verify_candidates   (official website is authoritative; opt-in network)
       → cleaning / normalization
       → verification        (official website is authoritative)
       → quality filtering
@@ -34,6 +35,7 @@ from src.candidates.prepare import CandidatePreparer, PreparedCandidate
 from src.candidates.store import load_discovery_dir
 from src.cleaning.normalizer import ToolNormalizer
 from src.core.config import Settings, get_settings
+from src.core.http_client import OfflineHttpClient
 from src.core.io import write_json, write_jsonl
 from src.core.logging_setup import get_logger, setup_logging
 from src.deduplication.deduplicator import Deduplicator
@@ -46,13 +48,19 @@ from src.models.base import Relationship
 from src.models.tool import Tool
 from src.scoring.scorer import QualityScorer, rank_and_select
 from src.validation.validator import ToolValidator
-from src.verification.verifier import OfficialSiteVerifier
+from src.verification.store import persist_verification, verification_record
+from src.verification.verifier import (
+    OfficialSiteVerifier,
+    VerificationReport,
+    VerificationResult,
+)
 
 logger = get_logger("pipeline")
 
 STAGES = (
     "discovery",
     "candidate_preparation",
+    "verify_candidates",
     "normalization",
     "verification",
     "quality_filter",
@@ -282,6 +290,99 @@ class ToolsPipeline:
             )
         return pairs
 
+    def verify_candidates(
+        self,
+        prepared: Sequence[Any],
+        *,
+        live: bool = False,
+        limit: int | None = None,
+        persist: bool = True,
+    ) -> tuple[list[VerificationResult], VerificationReport]:
+        """Verify prepared candidates against their **official** websites.
+
+        Sits between candidate preparation and normalization: a candidate is a
+        directory *sighting*, and this is the stage that goes and looks at the
+        product's own site (guideline §10). It reuses
+        :class:`~src.verification.verifier.OfficialSiteVerifier` verbatim — the
+        decision rules are not re-implemented, extended or relaxed here.
+
+        Network access is **opt-in**:
+
+        * ``live=False`` (default) swaps in
+          :class:`~src.core.http_client.OfflineHttpClient`, so not a single
+          socket is opened. Every candidate still flows through the real
+          verifier and comes back ``unreachable``/``failed`` — an honest "we
+          learned nothing", never a fabricated pass;
+        * ``live=True`` uses the injected/real :class:`HttpClient`.
+
+        ``limit`` caps how many candidates are processed, so the first live
+        pass can be a small spot check instead of a bulk crawl.
+
+        Results are persisted to ``data/interim/`` with discovery provenance
+        and official evidence kept in separate blocks. Nothing is written to
+        ``data/final/``.
+        """
+        stats = self.report.stage("verify_candidates")
+        stats.started_at = _now()
+        stats.input_count = len(prepared)
+
+        batch = list(prepared)[:limit] if limit is not None and limit >= 0 else list(prepared)
+        stats.details["live"] = live
+        stats.details["limit"] = limit
+        stats.details["considered"] = len(batch)
+        stats.details["skipped_by_limit"] = len(prepared) - len(batch)
+        stats.details["with_official_url"] = sum(
+            1 for candidate in batch if getattr(candidate, "website", None)
+        )
+
+        verifier = self._verifier_for(live=live)
+        results, report = verifier.verify_candidates(batch)
+
+        stats.output_count = len(results)
+        stats.details["report"] = report.to_dict()
+        if not live:
+            note = (
+                "verify_candidates ran offline (no --live): no network calls were "
+                "made, so no candidate could be verified from real page evidence"
+            )
+            stats.details["offline"] = note
+            self.report.notes.append(note)
+
+        if persist:
+            records = [
+                verification_record(candidate, result, live=live)
+                for candidate, result in zip(batch, results)
+            ]
+            artefacts = persist_verification(
+                records,
+                report,
+                interim_dir=self.settings.paths.resolve("interim"),
+                extra_report_fields={
+                    "live": live,
+                    "limit": limit,
+                    "input_candidates": len(prepared),
+                    "considered": len(batch),
+                },
+            )
+            stats.details["artefacts"] = artefacts
+            self.report.artefacts.update(artefacts)
+
+        stats.finished_at = _now()
+        return results, report
+
+    def _verifier_for(self, *, live: bool) -> OfficialSiteVerifier:
+        """The verifier to use for this pass — offline unless explicitly live.
+
+        An injected verifier always wins (tests and callers stay in control);
+        otherwise a live pass gets the real HTTP client and an offline pass gets
+        a client that physically cannot reach the network.
+        """
+        if self.verifier is not None:
+            return self.verifier
+        if live:
+            return OfficialSiteVerifier()
+        return OfficialSiteVerifier(client=OfflineHttpClient())  # type: ignore[arg-type]
+
     def normalize(self, candidates: Sequence[CandidateTool]) -> list[Tool]:
         """Clean + normalize candidates into canonical records."""
         stats = self.report.stage("normalization")
@@ -466,8 +567,13 @@ class ToolsPipeline:
         limit_per_source: int | None = None,
         candidates: Sequence[CandidateTool] | None = None,
         persist: bool = True,
+        verify_limit: int | None = None,
     ) -> RunReport:
-        """Execute every stage end to end and persist the artefacts."""
+        """Execute every stage end to end and persist the artefacts.
+
+        ``verify_limit`` caps the candidate-verification stage, so a live run
+        can be kept to a deliberate spot check rather than a bulk crawl.
+        """
         logger.info(
             "pipeline run starting",
             extra={
@@ -492,6 +598,17 @@ class ToolsPipeline:
         # that fail required-identity validation, so normalization consumes
         # exactly the candidates that survived it.
         pairs = self.prepare_candidates(discovered, persist=persist)
+
+        # Official-website verification of the *candidates*, before they become
+        # Tool records. Network access follows the run's own dry_run setting:
+        # a dry run stays strictly offline.
+        self.verify_candidates(
+            [prepared for _, prepared in pairs],
+            live=not self.settings.dry_run,
+            limit=verify_limit,
+            persist=persist,
+        )
+
         tools = self.normalize([candidate for candidate, _ in pairs])
         tools = self.verify(tools)
         tools = self.filter_quality(tools)
@@ -567,7 +684,11 @@ class ToolsPipeline:
                 paths.resolve("final") / "run_report.json", self.report.to_dict()
             ),
         }
-        self.report.artefacts = {name: str(path) for name, path in artefacts.items()}
+        # ``update``, not assignment: earlier stages (candidate verification)
+        # already registered their interim artefacts and must not be dropped.
+        self.report.artefacts.update(
+            {name: str(path) for name, path in artefacts.items()}
+        )
         # rewrite the report so it contains its own artefact list
         write_json(paths.resolve("final") / "run_report.json", self.report.to_dict())
 

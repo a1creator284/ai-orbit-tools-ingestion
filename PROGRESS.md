@@ -140,6 +140,70 @@ Completed and hardened the only stage allowed to promote a record out of
 
 ---
 
+### Run #6 — persist + wire verification (this run)
+
+**Unit 6.1 — `verify_candidates` stage, persistence and CLI**
+Connected the already-tested verification layer into the production pipeline.
+**No verification decision rule was changed**: `verifier.py`'s policy
+(`_decide`, evidence extraction, failure codes) is untouched and reused
+verbatim — this unit is wiring, persistence and safety gating only.
+
+* **New stage** `ToolsPipeline.verify_candidates(prepared, *, live, limit,
+  persist)` in `src/pipeline.py`, registered in `STAGES` between
+  `candidate_preparation` and `normalization` (asserted by a test), and called
+  from `run()` in that position. It consumes `PreparedCandidate` records and
+  delegates straight to the existing
+  `OfficialSiteVerifier.verify_candidates()`; no verification logic is
+  duplicated.
+* **Network access is opt-in, enforced at the socket, not by a branch.** New
+  `src/core/http_client.OfflineHttpClient` is an `HttpClient`-shaped client
+  that cannot fetch: `try_fetch` returns `None` (the real client's documented
+  graceful-degradation contract) and `fetch` raises `FetchError`.
+  `_verifier_for(live=...)` swaps it in whenever `--live` is absent, so
+  "offline" is guaranteed in the one place that could open a connection rather
+  than re-checked in every stage. It also records the URLs a live run *would*
+  have fetched, which is what makes the no-network claim testable.
+* **`--limit`** caps how many candidates are processed, so the first live pass
+  is a deliberate 10–20 candidate spot check instead of a bulk crawl. The
+  stage records `considered` and `skipped_by_limit` for the audit trail.
+* **New persistence layer `src/verification/store.py`:**
+  * `data/interim/candidates_verified.jsonl` — one row per candidate;
+  * `data/interim/candidates_verification_report.json` — auditable pass
+    summary (`VerificationReport` plus `live`, `limit`, `input_candidates`,
+    `considered`, artefact paths);
+  * **discovery provenance and official evidence are separate blocks.** Each
+    row carries `discovery` (which directory saw it, listing URL, source keys,
+    `SourceRef`s, observation time, identity basis, preparation issues) and
+    `verification` (official URL, final URL, HTTP status, identity/product
+    signals, evidence notes, failure codes, reason, `SourceRef(kind="official")`).
+    Tests assert neither block leaks fields into the other, so "who claimed
+    this?" and "what did we confirm?" can never be conflated;
+  * every row records `live`, so an offline pass can never be mistaken for a
+    real verification;
+  * `persist_verification` **refuses to write into `data/final/`** and raises
+    `VerificationError` — verified *candidates* are interim data, and the
+    published dataset stays a curation decision;
+  * `load_prepared_candidates` rehydrates `candidates_prepared.jsonl`
+    resiliently: a malformed line or a row missing the guaranteed identity
+    fields is skipped, never patched with a placeholder.
+* **`python run.py verify`** — new subcommand:
+  * `--live` is **required** for any real network verification; without it the
+    pass runs through `OfflineHttpClient` and makes zero requests (asserted by
+    a test that makes `requests.Session.request` raise);
+  * `--limit N` for the spot check, `--no-persist` to skip artefacts;
+  * reads the prepared artefact, falling back to preparing the stored
+    discovery candidates in memory, and reports 0/0 without fabricating
+    anything when there is no input;
+  * `run` gained `--verify-limit` so the full pipeline can cap the same stage.
+* Fixed a latent bug found while wiring: `_persist` **assigned**
+  `report.artefacts`, which would have discarded artefacts registered by
+  earlier stages; it now `update`s.
+* **Missing official URLs make no substitute request** — inherited from
+  `verify_candidate` and re-asserted at the pipeline level: the listing URL is
+  never fetched as a stand-in.
+
+---
+
 ## Tests
 
 | Suite | Count |
@@ -147,7 +211,8 @@ Completed and hardened the only stage allowed to promote a record out of
 | Before Run #4 | 75 passed |
 | After Unit 4.1 (`tests/test_candidate_store.py`, +18) | 93 passed |
 | After Units 4.2 + 4.3 (`test_candidate_prepare.py` +28, `test_logging_setup.py` +6) | 127 passed |
-| After Unit 5.1 (`tests/test_verification_official_site.py`, +41) | **168 passed** |
+| After Unit 5.1 (`tests/test_verification_official_site.py`, +41) | 168 passed |
+| After Unit 6.1 (`tests/test_verification_pipeline_wiring.py`, +38) | **206 passed** |
 
 Offline smoke check against the existing `data/raw/discovery/` artefacts
 (200 real candidates): 200 loaded / 0 skipped, 200 prepared / 0 rejected,
@@ -168,8 +233,33 @@ listing URL is not fetched), unrelated page (identity not confirmed),
 identity-without-affordance, off-site links not counted as evidence, batch
 reporting, JSON round-trip, determinism and hostile-record resilience.
 
-All tests are offline: HTML fixtures + `FakeHttpClient`, and `tmp_path` JSONL
-fixtures for the candidate store. No network access, no live directory calls.
+New Run #6 wiring tests (38) cover: stage position in `STAGES` and in an actual
+run, consumption of prepared candidates through the existing verifier, the
+listing URL never being fetched as a substitute, run-report stage statistics,
+`--live` gating (offline client selected by default, real client only when
+live, injected verifier always winning, zero fetches and zero verifications
+offline, `OfflineHttpClient` recording intent and refusing `fetch`), `--limit`
+(cap, `None`, `0`, over-large), persistence (JSONL + report under `interim`,
+nothing in `data/final/`, `VerificationError` when asked to write there,
+discovery/verification block separation in both directions, `live` flag on
+every row, `--no-persist`, JSON round-trip, hostile-record resilience),
+prepared-candidate reload (round-trip, missing file, malformed rows skipped)
+and the CLI (subcommand registration, `--live` default false and opt-in,
+`--limit` parsing, `run --verify-limit`, an offline CLI run asserted to open no
+socket, limit applied end to end, interim-only persistence, missing input
+reported honestly).
+
+Run #6 offline CLI smoke check (`python run.py verify --limit 15`) over the
+real stored artefacts: 200 prepared, 15 considered, 15 with an official URL,
+**0 fetched, 0 verified**, 15 `unreachable` (`fetch_failed`) — and `data/final/`
+untouched. No live verification run has been performed.
+
+All tests are offline: HTML fixtures + `FakeHttpClient`/`RecordingClient`/
+`OfflineHttpClient`, and `tmp_path` JSONL fixtures for the stores. The CLI
+offline test additionally makes `HttpClient` construction fatal, so a network
+leak fails loudly instead of passing silently; the CLI smoke check was
+re-executed with `socket.socket.connect` patched to raise and completed
+cleanly. No network access, no live directory calls.
 
 ---
 
@@ -180,16 +270,23 @@ fixtures for the candidate store. No network access, no live directory calls.
 * Run #4 Units 4.2 + 4.3: pushed to `origin/main` (candidate preparation +
   logging fix)
 * Run #4 checkpoint: `96361eb`
-* Run #5 Unit 5.1: official-website verification (this commit)
+* Run #5 Unit 5.1: official-website verification
+* Run #5 checkpoint: `74cd440`
+* Run #6 Unit 6.1: persist + wire official-site verification (this commit)
 
 ---
 
 ## Known limitations
 
-* Official-website verification is implemented and tested offline, but has
-  **not** been run against live websites yet: `ToolsPipeline.verify` still
-  skips the stage while `dry_run: true`. No verification artefact is persisted
-  under `data/` yet either (see next step).
+* Official-website verification is now wired, persisted and CLI-accessible, but
+  has **still not been run against live websites**. Every pass so far was
+  offline, so `data/interim/candidates_verified.jsonl` currently contains only
+  `unreachable`/`failed` rows with `live: false`. The first live pass should be
+  `python run.py verify --live --limit 10`.
+* The `Tool`-level `ToolsPipeline.verify` stage still skips while
+  `dry_run: true`; candidate-level verification (`verify_candidates`) is the
+  wired stage. Feeding verified candidate evidence into the normalized `Tool`
+  records is the next integration step, not part of this unit.
 * Verification currently reads only the official **landing** page. Pricing,
   feature and launch-date extraction from deeper official pages is not
   implemented — those fields therefore stay blank by design.
@@ -204,18 +301,22 @@ fixtures for the candidate store. No network access, no live directory calls.
 
 ## Exact next recommended step
 
-**Persist and wire the verification stage.** Specifically:
+**Run the first live verification spot check, then calibrate.** Specifically:
 
-1. add `verify_candidates` to `src/pipeline.py` between
-   `prepare_candidates` and `normalize`, running
-   `OfficialSiteVerifier.verify_candidates` over the prepared candidates and
-   recording `VerificationReport` in the run report;
-2. persist the outcome to `data/interim/candidates_verified.jsonl` (+
-   `candidates_verification_report.json`) via `write_jsonl`/`write_json`,
-   keeping verified records out of `data/final/`;
-3. add a `python run.py verify` subcommand (with an explicit `--live` flag, so
-   network access is always opt-in) plus a small `--limit` so the first real
-   run can be a 10–20 candidate spot check, not a bulk crawl;
-4. only then consider official-page field extraction (pricing/features), which
-   must feed the existing extractor injection point — still with no LLM and no
-   guessing.
+1. run `python run.py verify --live --limit 10` — a small, deliberate spot
+   check against 10 real official websites. Nothing about the decision rules
+   should be changed before this data exists;
+2. read `data/interim/candidates_verification_report.json` and inspect the
+   `failure_counts` / `status_counts`. The purpose of the spot check is to find
+   out which failures are *real* (dead sites, parked domains) and which are
+   artefacts of the verifier meeting the live web for the first time (e.g.
+   JS-rendered landing pages producing `thin_content`, or CDN challenges
+   producing `bot_challenge`). Only a failure reproduced on a real page
+   justifies touching `_decide`;
+3. widen gradually (`--limit 50`, then `--limit 200`) once the spot check looks
+   sane, keeping every pass under an explicit limit — still no bulk crawl;
+4. then feed verified candidate evidence into the normalized `Tool` records, so
+   `verification_status`, `last_verified_date` and the official `SourceRef`
+   reach the records that scoring and validation consume;
+5. only after that, official-page field extraction (pricing/features) through
+   the existing extractor injection point — still no LLM, no guessing.
