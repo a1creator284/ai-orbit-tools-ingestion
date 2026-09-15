@@ -22,6 +22,7 @@ from typing import Any
 
 from pydantic import Field, computed_field, field_validator, model_validator
 
+from src.core.product_identity import product_identity_key
 from src.core.text import clean_text
 from src.core.urls import extract_registrable_domain, normalize_url
 from src.models.base import AIOrbitModel, BaseEntity, SourceRef
@@ -253,26 +254,77 @@ class VerificationRecord(AIOrbitModel):
 
 
 class DedupInfo(AIOrbitModel):
-    """Entity-resolution audit trail (guideline section 7)."""
+    """Entity-resolution audit trail (guideline section 7).
+
+    Everything a reviewer needs to audit *why* two sightings became one record
+    (or deliberately did not) travels here: the identity key and its basis, the
+    canonical product key (host + product path), every alias and listing URL
+    seen, the evidence behind each merge, and an explicit reason per record
+    queued for human review.
+    """
 
     identity_key: str | None = None
     identity_basis: str | None = Field(
-        None, description="website_domain | product_url_domain | name+company | name"
+        None,
+        description=(
+            "canonical_url | website_product_url | website_domain | "
+            "listing_product_url | listing_domain | name+company | name"
+        ),
     )
+    #: Registrable domain of the official site — a *company/site* signal. On its
+    #: own it is never proof of product identity (distinct products share it).
     canonical_domain: str | None = None
+    #: Canonical product identity: full host plus product-identifying path,
+    #: e.g. ``company.com/product-a``. See :mod:`src.core.product_identity`.
+    product_key: str | None = None
+    #: Explicitly resolved canonical product URL (redirect target,
+    #: ``rel=canonical``, verified official URL) — the strongest identity.
+    canonical_url: str | None = None
     canonical_name_key: str | None = None
     aliases: list[str] = Field(default_factory=list, description="Observed name variations")
+    #: Every directory detail/listing URL this product was sighted at.
+    listing_urls: list[str] = Field(default_factory=list)
     merged_from_ids: list[str] = Field(default_factory=list)
+    #: Identity keys of every record folded into this one.
+    merged_identity_keys: list[str] = Field(default_factory=list)
     merged_source_count: int = 1
+    #: Why each merge happened, e.g. ``"tier_b: product identity company.com/a"``.
+    merge_evidence: list[str] = Field(default_factory=list)
     duplicate_of: str | None = Field(None, description="Set on non-canonical records")
     review_candidates: list[str] = Field(
         default_factory=list, description="IDs flagged as possible duplicates for human review"
     )
+    #: One explicit ``"<other id>: <reason>"`` entry per review candidate.
+    review_reasons: list[str] = Field(default_factory=list)
 
     @field_validator("aliases", mode="before")
     @classmethod
     def _aliases(cls, value: Any) -> Any:
         return _clean_str_list(value, max_items=25, max_length=200)
+
+    @field_validator("canonical_url", mode="before")
+    @classmethod
+    def _canonical_url(cls, value: Any) -> Any:
+        return normalize_url(value) if value else None
+
+    @field_validator("listing_urls", mode="before")
+    @classmethod
+    def _listing_urls(cls, value: Any) -> Any:
+        if value is None:
+            return []
+        if isinstance(value, str):
+            value = [value]
+        seen: list[str] = []
+        for item in value:
+            normalized = normalize_url(item) if item else None
+            if normalized and normalized not in seen:
+                seen.append(normalized)
+        return seen
+
+    @field_validator("merge_evidence", "review_reasons", "merged_identity_keys", mode="before")
+    @classmethod
+    def _audit_lists(cls, value: Any) -> Any:
+        return _clean_str_list(value, max_items=200, max_length=400)
 
 
 class Tool(BaseEntity):
@@ -436,10 +488,16 @@ class Tool(BaseEntity):
             object.__setattr__(self, "description", self.short_description)
         if not self.short_description and self.description:
             object.__setattr__(self, "short_description", self.description[:320])
-        # keep dedup identity hints in sync with the official domain
+        # keep dedup identity hints in sync with the official site
         domain = extract_registrable_domain(self.website)
         if domain and not self.dedup.canonical_domain:
             self.dedup.canonical_domain = domain
+        # The canonical *product* key is host + product path, so distinct
+        # products under one domain stay distinguishable (guideline §7).
+        if not self.dedup.product_key:
+            key = product_identity_key(self.dedup.canonical_url or self.website)
+            if key:
+                self.dedup.product_key = key
         if self.rejection_reasons and not self.rejected:
             object.__setattr__(self, "rejected", True)
         object.__setattr__(self, "last_updated_at", datetime.now(timezone.utc))

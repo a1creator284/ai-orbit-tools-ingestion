@@ -110,7 +110,10 @@ class TestRequiredIdentity:
         assert prepared is not None
         # discovery prefers under-merging / not losing real products
         assert prepared.website is None
-        assert prepared.identity_basis == "product_url_domain"
+        # The directory detail URL identifies the product only *inside* that
+        # directory, so the basis is listing-scoped and only medium confidence.
+        assert prepared.identity_basis == "listing_product_url"
+        assert prepared.identity_confidence == "medium"
         assert CandidateIssue.NO_OFFICIAL_URL in prepared.issues
         assert prepared.needs_review is True
         assert prepared.review_notes
@@ -256,7 +259,7 @@ class TestBatchAndReport:
             [candidate(), candidate(name="NoSite", website=None, tagline=None)]
         )
         assert report.identity_bases["website_domain"] == 1
-        assert report.identity_bases["product_url_domain"] == 1
+        assert report.identity_bases["listing_product_url"] == 1
         assert report.with_official_url == 1
         assert report.issue_counts[CandidateIssue.NO_OFFICIAL_URL] == 1
         assert report.needs_review_count == 1
