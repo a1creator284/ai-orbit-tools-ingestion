@@ -9,9 +9,10 @@ website → Verify → Enrich → Deduplicate → Curate")::
       → verify_candidates   (official website is authoritative; opt-in network)
       → cleaning / normalization
       → verification        (official website is authoritative)
-      → quality filtering
+      → quality filtering   (drops records already rejected upstream)
       → deduplication / entity resolution
       → scoring             (100-point framework)
+      → threshold filtering (reject / skip / selective / include, §5 bands)
       → enrichment
       → descriptions        (LLM, editorial only)
       → relationships
@@ -46,6 +47,7 @@ from src.enrichment.base import EnrichmentPipeline
 from src.enrichment.relationships import RelationshipExtractor
 from src.models.base import Relationship
 from src.models.tool import Tool
+from src.scoring.filter import FilterDecision, FilterReport, QualityFilter
 from src.scoring.scorer import QualityScorer, rank_and_select
 from src.validation.validator import ToolValidator
 from src.verification.store import persist_verification, verification_record
@@ -66,6 +68,7 @@ STAGES = (
     "quality_filter",
     "deduplication",
     "scoring",
+    "threshold_filter",
     "enrichment",
     "relationships",
     "validation",
@@ -155,6 +158,7 @@ class ToolsPipeline:
         verifier: OfficialSiteVerifier | None = None,
         deduplicator: Deduplicator | None = None,
         scorer: QualityScorer | None = None,
+        quality_filter: QualityFilter | None = None,
         preparer: CandidatePreparer | None = None,
         enrichment: EnrichmentPipeline | None = None,
         relationships: RelationshipExtractor | None = None,
@@ -171,6 +175,9 @@ class ToolsPipeline:
         self.preparer = preparer or CandidatePreparer()
         self.deduplicator = deduplicator or Deduplicator()
         self.scorer = scorer or QualityScorer(self.settings.scoring)
+        self.quality_filter = quality_filter or QualityFilter(self.settings.scoring)
+        #: Decisions from the last threshold-filter pass (persisted in _persist).
+        self._filter_decisions: list[FilterDecision] = []
         self.enrichment = enrichment or EnrichmentPipeline()
         self.relationships = relationships or RelationshipExtractor()
         self.validator = validator or ToolValidator()
@@ -462,11 +469,21 @@ class ToolsPipeline:
         return canonical
 
     def score(self, tools: Sequence[Tool]) -> list[Tool]:
-        """Apply the 100-point framework (guideline §5)."""
+        """Apply the 100-point framework (guideline §5).
+
+        Scoring is pure and non-destructive: every record gets all eight
+        rubric components plus a per-criterion breakdown, and **nothing is
+        admitted or rejected here**. Threshold decisions are
+        :meth:`apply_thresholds`'s job, so the score of a record never depends
+        on what the batch needs.
+        """
         stats = self.report.stage("scoring")
         stats.started_at = _now()
         stats.input_count = len(tools)
         bands: dict[str, int] = {}
+        currency: dict[str, int] = {}
+        unevidenced: dict[str, int] = {}
+        scored = 0
         for tool in tools:
             try:
                 self.scorer.apply(tool)
@@ -474,12 +491,47 @@ class ToolsPipeline:
                 stats.error_count += 1
                 logger.warning("scoring failed", extra={"tool": tool.name, "error": str(exc)})
                 continue
+            scored += 1
             band = tool.band or "unscored"
             bands[band] = bands.get(band, 0) + 1
-        stats.details["bands"] = bands
+            breakdown = tool.quality
+            if breakdown is not None:
+                state = breakdown.currency_state or "unknown"
+                currency[state] = currency.get(state, 0) + 1
+                for component in breakdown.unevidenced_components:
+                    unevidenced[component] = unevidenced.get(component, 0) + 1
+        stats.details["bands"] = dict(sorted(bands.items()))
+        stats.details["currency_states"] = dict(sorted(currency.items()))
+        stats.details["unevidenced_components"] = dict(sorted(unevidenced.items()))
+        stats.details["scored"] = scored
+        stats.details["weights"] = dict(self.settings.scoring.weights)
         stats.output_count = len(tools)
         stats.finished_at = _now()
         return list(tools)
+
+    def apply_thresholds(
+        self, tools: Sequence[Tool]
+    ) -> tuple[list[Tool], list[FilterDecision], FilterReport]:
+        """Apply the guideline §5 score thresholds (reject/skip/selective/include).
+
+        Returns ``(kept, decisions, report)``. Every input record produces a
+        decision — including the dropped ones — so no record can leave the
+        pipeline without a recorded reason. The batch is never padded here:
+        the filter has no notion of a target count.
+        """
+        stats = self.report.stage("threshold_filter")
+        stats.started_at = _now()
+        stats.input_count = len(tools)
+
+        kept, decisions, report = self.quality_filter.filter(tools)
+
+        stats.output_count = len(kept)
+        stats.dropped_count = len(tools) - len(kept)
+        stats.details = report.to_dict()
+        self.report.notes.extend(report.notes)
+        stats.finished_at = _now()
+        self._filter_decisions = list(decisions)
+        return kept, decisions, report
 
     def enrich(self, tools: Sequence[Tool]) -> list[Tool]:
         """Fill remaining gaps from secondary sources (never overwriting official data)."""
@@ -613,19 +665,38 @@ class ToolsPipeline:
         tools = self.verify(tools)
         tools = self.filter_quality(tools)
         tools = self.deduplicate(tools)
-        tools = self.score(tools)
-        tools = self.enrich(tools)
-        publishable, validation_results = self.validate(tools)
+        scored = self.score(tools)
+        # Threshold filtering: <60 reject, 60-69 skip, 70-79 selective, 80+
+        # include. Records that do not pass keep their score and their reason
+        # and stay available as rejected artefacts — they are not deleted.
+        above_threshold, _decisions, _filter_report = self.apply_thresholds(scored)
+        above_threshold = self.enrich(above_threshold)
+        publishable, validation_results = self.validate(above_threshold)
         selected, not_selected = self.select(publishable)
         edges = self.map_relationships(selected)
 
+        # Identity comparison (``id()``), not equality: two distinct records
+        # can compare equal field-by-field and must not cancel each other out.
+        kept_ids = {id(tool) for tool in above_threshold}
+        dropped_by_threshold = [tool for tool in scored if id(tool) not in kept_ids]
         self.report.selected_count = len(selected)
-        self.report.rejected_count = len(not_selected) + (len(tools) - len(publishable))
+        self.report.rejected_count = (
+            len(not_selected)
+            + len(dropped_by_threshold)
+            + (len(above_threshold) - len(publishable))
+        )
         self.report.review_count = sum(1 for tool in selected if tool.needs_human_review)
         self.report.finished_at = _now()
 
         if persist:
-            self._persist(discovered, tools, selected, not_selected, edges, validation_results)
+            self._persist(
+                discovered,
+                scored,
+                selected,
+                [*not_selected, *dropped_by_threshold],
+                edges,
+                validation_results,
+            )
 
         logger.info("pipeline run complete", extra=self.report.to_dict()["stages"][-1])
         return self.report
@@ -663,11 +734,23 @@ class ToolsPipeline:
                         "name": tool.name,
                         "website": tool.website,
                         "score": tool.score,
+                        "band": tool.band,
                         "reasons": [str(r) for r in tool.rejection_reasons],
                         "notes": tool.rejection_notes,
+                        # Provenance travels with the rejection: a reader can
+                        # always tell which directory claimed the record.
+                        "discovery_sources": [
+                            source.to_dict() for source in tool.discovery_sources
+                        ],
                     }
                     for tool in not_selected
                 ],
+            ),
+            # One row per scored record, kept or dropped, with the band, the
+            # reason and the failed evidence gates.
+            "score_decisions": write_jsonl(
+                paths.resolve("processed") / "score_decisions.jsonl",
+                [decision.to_dict() for decision in self._filter_decisions],
             ),
             "review_queue": write_jsonl(
                 paths.resolve("processed") / "review_queue.jsonl",

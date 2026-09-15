@@ -26,12 +26,13 @@ import sys
 from pathlib import Path
 
 from src.core.config import get_settings
-from src.core.io import read_jsonl, write_json
+from src.core.io import read_jsonl, write_json, write_jsonl
 from src.core.logging_setup import setup_logging
 from src.discovery.registry import SourceRegistry
 from src.discovery.runner import DiscoveryRunner
 from src.models.tool import Tool
 from src.pipeline import ToolsPipeline
+from src.scoring.filter import QualityFilter
 from src.scoring.scorer import QualityScorer, rank_and_select
 from src.validation.validator import ToolValidator
 
@@ -101,12 +102,44 @@ def cmd_selfcheck(args: argparse.Namespace) -> int:
     )
 
     scorer = QualityScorer(settings.scoring)
-    empty_score = scorer.score(left).total
+    breakdown = scorer.score(left)
+    empty_score = breakdown.total
     checks.append(
         (
             "an unverified/empty record scores below the reject threshold",
             empty_score < settings.scoring.reject_below,
             f"score={empty_score}",
+        )
+    )
+    checks.append(
+        (
+            "score is bounded to 0-100",
+            0.0 <= empty_score <= 100.0,
+            f"score={empty_score}",
+        )
+    )
+    from src.scoring.rubric import COMPONENTS as RUBRIC_COMPONENTS
+
+    checks.append(
+        (
+            "every rubric component is scored",
+            set(breakdown.component_points()) == set(RUBRIC_COMPONENTS),
+            f"components={len(breakdown.component_points())}",
+        )
+    )
+    checks.append(
+        (
+            "scoring is deterministic",
+            scorer.score(left).total == empty_score,
+            f"repeat={scorer.score(left).total}",
+        )
+    )
+    decision = QualityFilter(settings.scoring).decide(left)
+    checks.append(
+        (
+            "an unscorable record is rejected with a recorded reason",
+            decision.outcome == "reject" and bool(decision.rejection_reason),
+            f"outcome={decision.outcome} reason={decision.rejection_reason}",
         )
     )
 
@@ -307,7 +340,14 @@ def cmd_verify(args: argparse.Namespace) -> int:
 
 
 def cmd_score(args: argparse.Namespace) -> int:
-    """Re-score and re-rank an existing processed dataset."""
+    """Re-score, threshold-filter and re-rank an existing processed dataset.
+
+    Runs the same three stages the pipeline does, in the same order:
+    score (100-point rubric) → threshold filter (§5 bands) → select best N.
+    Every dropped record keeps its score, its band and its reason, written to
+    ``score_decisions.jsonl`` next to the output, so nothing disappears
+    silently and the batch is never padded to reach the target.
+    """
     settings = get_settings()
     path = Path(args.input)
     tools: list[Tool] = []
@@ -322,21 +362,28 @@ def cmd_score(args: argparse.Namespace) -> int:
     scorer = QualityScorer(settings.scoring)
     for tool in tools:
         scorer.apply(tool)
+
+    kept, decisions, filter_report = QualityFilter(settings.scoring).filter(tools)
     selected, not_selected = rank_and_select(
-        tools,
+        kept,
         target_size=settings.batch.target_size,
         max_per_primary_task=settings.batch.max_per_primary_task,
     )
     output = Path(args.output or settings.paths.resolve("final") / "tools.json")
     write_json(output, [tool.to_dict() for tool in selected])
+    decisions_path = output.parent / "score_decisions.jsonl"
+    write_jsonl(decisions_path, [decision.to_dict() for decision in decisions])
     print(
         json.dumps(
             {
                 "input_records": len(tools),
                 "schema_errors": errors,
+                "threshold_filter": filter_report.to_dict(),
+                "above_threshold": len(kept),
                 "selected": len(selected),
                 "not_selected": len(not_selected),
                 "output": str(output),
+                "decisions": str(decisions_path),
             },
             indent=2,
         )

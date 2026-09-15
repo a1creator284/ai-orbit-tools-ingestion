@@ -44,9 +44,14 @@ scoring:
     excellent: 80
     good: 70
     average: 60
+  # Guideline §5 thresholds, verbatim:
+  #   <60    reject
+  #   60-69  average — usually skip
+  #   70-79  good — include selectively (evidence-gated, see src/scoring/filter.py)
+  #   80+    excellent/exceptional — include
   reject_below: 60
-  # 70+ = "Good — include selectively"; below that the guideline says skip.
-  include_at_or_above: 70
+  skip_below: 70
+  include_at_or_above: 80
 
 dedup:
   name_similarity_threshold: 0.88

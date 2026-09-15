@@ -109,13 +109,24 @@ class ScoringConfig:
     )
     #: Scores strictly below this are rejected ("Below 60 → Reject").
     reject_below: int = 60
-    #: Minimum score required to be included in a batch submission.
-    include_at_or_above: int = 70
+    #: 60-69 is "average — usually skip": below this a record is skipped.
+    skip_below: int = 70
+    #: 80+ is "include"; 70-79 is included only selectively, on evidence.
+    include_at_or_above: int = 80
 
     def __post_init__(self) -> None:
-        total = sum(self.weights.values())
-        if total != 100:
-            raise ConfigError(f"scoring weights must sum to 100, got {total}")
+        # The rubric module owns the arithmetic (weights sum to 100 and no
+        # component can overflow its weight), so there is exactly one
+        # definition of "valid rubric" in the codebase.
+        from src.scoring.rubric import validate_rubric
+
+        validate_rubric(self.weights)
+        if not self.reject_below <= self.skip_below <= self.include_at_or_above:
+            raise ConfigError(
+                "scoring thresholds must be ordered reject_below <= skip_below "
+                f"<= include_at_or_above, got {self.reject_below}/"
+                f"{self.skip_below}/{self.include_at_or_above}"
+            )
 
 
 @dataclass

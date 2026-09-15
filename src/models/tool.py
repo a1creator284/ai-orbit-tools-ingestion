@@ -158,9 +158,13 @@ class ScoreBreakdown(AIOrbitModel):
     """Transparent, explainable 100-point score (guideline section 5).
 
     Each component stores the awarded points, the maximum weight and the
-    human-readable reasons, so a reviewer can audit any decision.
+    human-readable reasons, so a reviewer can audit any decision. The field
+    bounds below are the rubric weights themselves, so a component that
+    somehow exceeded its weight is a schema error rather than a silent
+    inflation of the total.
     """
 
+    #: Component scores. ``le=`` is the guideline §5 weight, verbatim.
     product_quality_capability: float = Field(0, ge=0, le=25)
     real_user_value: float = Field(0, ge=0, le=20)
     current_usage_adoption: float = Field(0, ge=0, le=15)
@@ -173,37 +177,54 @@ class ScoreBreakdown(AIOrbitModel):
     reasons: dict[str, list[str]] = Field(
         default_factory=dict, description="component -> list of explanations"
     )
-    #: Components that could not be evidenced (scored conservatively, not guessed).
+    #: component -> {criterion: points} — the full per-criterion audit trail.
+    criteria: dict[str, dict[str, float]] = Field(default_factory=dict)
+    #: component -> rubric weight actually used when scoring this record.
+    max_points: dict[str, float] = Field(default_factory=dict)
+    #: ``component.criterion`` entries that had no evidence (scored nothing).
+    missing_evidence: list[str] = Field(default_factory=list)
+    #: Components that could not be evidenced at all (scored 0, not guessed).
     unevidenced_components: list[str] = Field(default_factory=list)
+    #: component -> transparent note about a discount that was applied.
+    adjustments: dict[str, str] = Field(default_factory=dict)
+    #: Share of the 100 points that was even assessable from the evidence.
+    evidence_confidence: float = Field(0, ge=0, le=1)
+    #: ``current`` | ``accessible_stale`` | ``unknown`` | ``dead``.
+    currency_state: str | None = None
+    currency_reason: str | None = None
 
     @computed_field  # type: ignore[prop-decorator]
     @property
     def total(self) -> float:
-        return round(
-            self.product_quality_capability
-            + self.real_user_value
-            + self.current_usage_adoption
-            + self.activity_maintenance
-            + self.product_maturity_reliability
-            + self.recency_momentum
-            + self.differentiation
-            + self.information_quality_verifiability,
-            2,
-        )
+        """Deterministic sum of the eight components, out of 100."""
+        from src.scoring.rubric import COMPONENTS, MAX_TOTAL, quantize
+
+        total = quantize(sum(getattr(self, name) for name in COMPONENTS))
+        # Structurally impossible given the field bounds, but the dataset
+        # contract is "0-100" and it is cheap to guarantee it here too.
+        return min(max(total, 0.0), MAX_TOTAL)
 
     @computed_field  # type: ignore[prop-decorator]
     @property
     def band(self) -> QualityBand:
+        from src.scoring.rubric import BANDS
+
         total = self.total
-        if total >= 90:
+        if total >= BANDS["exceptional"]:
             return QualityBand.EXCEPTIONAL
-        if total >= 80:
+        if total >= BANDS["excellent"]:
             return QualityBand.EXCELLENT
-        if total >= 70:
+        if total >= BANDS["good"]:
             return QualityBand.GOOD
-        if total >= 60:
+        if total >= BANDS["average"]:
             return QualityBand.AVERAGE
         return QualityBand.REJECT
+
+    def component_points(self) -> dict[str, float]:
+        """Component -> awarded points, in rubric order."""
+        from src.scoring.rubric import COMPONENTS
+
+        return {name: getattr(self, name) for name in COMPONENTS}
 
 
 class VerificationRecord(AIOrbitModel):

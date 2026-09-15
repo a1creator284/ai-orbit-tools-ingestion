@@ -1,39 +1,47 @@
-"""The 100-point quality scoring framework.
+"""The 100-point quality scoring stage.
 
-Weights are taken verbatim from "AI Tools: Data Extraction & Curation
-Guidelines" §5::
-
-    Product quality & capability          25
-    Real user value / usefulness          20
-    Current usage / adoption              15
-    Activity & maintenance                15
-    Product maturity / reliability        10
-    Recency / momentum                     5
-    Differentiation                        5
-    Information quality / verifiability    5
-    ----------------------------------------
-    Total                                100
-
-Bands (§5): 90–100 exceptional, 80–89 excellent, 70–79 good,
-60–69 average, <60 reject.
+The rubric itself (weights, bands, sub-criteria) lives in
+:mod:`src.scoring.rubric`; this module is the *evaluator*: it turns a
+:class:`~src.models.tool.Tool` into a :class:`~src.models.tool.ScoreBreakdown`
+with a per-criterion audit trail.
 
 Design decisions
 ----------------
-* **Transparent & explainable.** Every component returns points *and* the
-  reasons behind them; the reasons are stored on the record.
-* **Evidence-based, never optimistic.** A component with no evidence scores a
-  conservative baseline and is listed in ``unevidenced_components``. Guessing a
-  high score would be equivalent to fabricating data.
-* **Verification-gated.** An unverified record cannot reach the top bands,
-  because "information quality / verifiability" and the maturity/adoption
-  components all depend on verified evidence.
+**1. Exactly eight components, exactly the rubric weights.**
+Every candidate is scored on all eight components. A component's sub-criteria
+are declared as shares of its own weight (:data:`src.scoring.rubric.CRITERIA`),
+so a component can never exceed its weight and the total can never exceed 100.
+
+**2. Deterministic.**
+No clocks, no randomness, no dict-iteration order dependence and no float
+drift: every award is quantized half-up (:func:`src.scoring.rubric.quantize`),
+and ``today`` is injectable so date-sensitive components are reproducible.
+
+**3. Missing evidence scores nothing and says so.**
+An absent field never earns points and is never replaced by a plausible
+default. Each unmet criterion is recorded in ``missing_evidence`` and each
+component that had no evidence at all is listed in ``unevidenced_components``.
+``evidence_confidence`` reports how much of the 100 points was even
+*assessable*, so a thin record is visibly thin instead of quietly average.
+
+**4. "Current usage" means current.**
+Adoption, activity and recency are gated on a single, shared
+:class:`CurrencyAssessment` computed from current-accessibility evidence,
+operational status and verification freshness. A historically popular product
+whose site is dead, or which we have no current evidence for, has its adoption
+points discounted and its recency zeroed — so it cannot ride past the
+thresholds on old fame. The discount is written into the breakdown
+(``adjustments``) rather than applied silently.
+
+Threshold decisions (reject / skip / selective / include) are **not** made
+here; they belong to :mod:`src.scoring.filter`, which consumes this breakdown.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
-from typing import Callable
+from typing import Mapping, Sequence
 
 from src.core.config import ScoringConfig, get_settings
 from src.core.logging_setup import get_logger
@@ -45,438 +53,809 @@ from src.models.enums import (
     VerificationStatus,
 )
 from src.models.tool import ScoreBreakdown, Tool
+from src.scoring.rubric import (
+    BANDS,
+    COMPONENTS,
+    CRITERIA,
+    MAX_TOTAL,
+    SKIP_BELOW,
+    WEIGHTS,
+    quantize,
+    share_points,
+    validate_rubric,
+)
 
 logger = get_logger("scoring")
 
-#: Component name -> weight. Mirrors config; kept here for documentation.
-COMPONENTS = (
-    "product_quality_capability",
-    "real_user_value",
-    "current_usage_adoption",
-    "activity_maintenance",
-    "product_maturity_reliability",
-    "recency_momentum",
-    "differentiation",
-    "information_quality_verifiability",
+__all__ = [
+    "COMPONENTS",
+    "ComponentScore",
+    "CurrencyAssessment",
+    "QualityScorer",
+    "assess_currency",
+    "rank_and_select",
+]
+
+#: Verification older than this is no longer evidence of *current* activity.
+STALE_VERIFICATION_DAYS = 180
+
+#: Verification within this window counts as fresh.
+FRESH_VERIFICATION_DAYS = 90
+
+#: Statuses that prove the product is not currently operating (§4).
+DEAD_STATUSES = (
+    ToolStatus.DEPRECATED,
+    ToolStatus.DISCONTINUED,
+    ToolStatus.INACCESSIBLE,
 )
 
+#: Statuses that prove it is.
+LIVE_STATUSES = (ToolStatus.ACTIVE, ToolStatus.BETA)
 
+#: Pre-GA statuses: real, but not yet a shipping product.
+PRE_GA_STATUSES = (ToolStatus.ALPHA, ToolStatus.WAITLIST)
+
+
+# ======================================================== component scores
 @dataclass
 class ComponentScore:
-    """Points awarded for one component, with its justification."""
+    """Points awarded for one rubric component, with its full justification."""
 
     name: str
     points: float
     max_points: float
-    reasons: list[str]
+    reasons: list[str] = field(default_factory=list)
+    criteria: dict[str, float] = field(default_factory=dict)
+    missing: list[str] = field(default_factory=list)
     evidenced: bool = True
+    adjustment: str | None = None
 
     def clamped(self) -> float:
-        return round(max(0.0, min(self.points, self.max_points)), 2)
+        """Points, clamped into ``[0, max_points]`` and quantized."""
+        return quantize(max(0.0, min(self.points, self.max_points)))
 
 
+class _ComponentBuilder:
+    """Accumulates per-criterion awards for one component.
+
+    Every award goes through the rubric, so a criterion can only ever pay out
+    its declared share of the component weight, and every *unmet* criterion is
+    recorded — that record is what makes "we had no evidence" auditable.
+    """
+
+    def __init__(self, component: str, weights: Mapping[str, float]) -> None:
+        self.component = component
+        self.weights = weights
+        self.weight = float(weights[component])
+        self._criteria = {c.key: c for c in CRITERIA[component]}
+        self.awarded: dict[str, float] = {}
+        self.reasons: list[str] = []
+        self.missing: list[str] = []
+        self._factor: float = 1.0
+        self.adjustment: str | None = None
+
+    # ------------------------------------------------------------- awarding
+    def award(self, key: str, fraction: float = 1.0, reason: str | None = None) -> float:
+        """Award ``fraction`` (0-1) of criterion ``key``'s share."""
+        criterion = self._criteria[key]
+        fraction = max(0.0, min(float(fraction), 1.0))
+        if fraction <= 0:
+            self.miss(key, reason)
+            return 0.0
+        points = share_points(self.component, criterion.share * fraction, self.weights)
+        self.awarded[key] = quantize(self.awarded.get(key, 0.0) + points, 4)
+        if reason:
+            self.reasons.append(reason)
+        return points
+
+    def miss(self, key: str, reason: str | None = None) -> None:
+        """Record that a criterion could not be met (no points, no guess)."""
+        if key in self._criteria and key not in self.missing:
+            self.missing.append(key)
+        if reason:
+            self.reasons.append(reason)
+
+    def graded(
+        self,
+        key: str,
+        count: int,
+        full_at: int,
+        reason: str | None = None,
+    ) -> float:
+        """Award a count-graded criterion (``full_at`` items = full share)."""
+        if not count:
+            self.miss(key)
+            return 0.0
+        return self.award(key, min(count, full_at) / full_at, reason)
+
+    def tiered(
+        self,
+        key: str,
+        value: float | int | None,
+        tiers: Sequence[tuple[float, float]],
+        label: str,
+    ) -> float:
+        """Award from a descending tier table; ``None``/0 awards nothing."""
+        if not value:
+            self.miss(key)
+            return 0.0
+        for threshold, fraction in tiers:
+            if value >= threshold:
+                return self.award(key, fraction, f"{label}: {value:,}")
+        self.miss(key, f"{label}: {value:,} below the lowest credited tier")
+        return 0.0
+
+    def discount(self, factor: float, note: str) -> None:
+        """Scale the whole component (used for currency discounts)."""
+        self._factor = max(0.0, min(float(factor), 1.0))
+        self.note_adjustment(note)
+
+    def note_adjustment(self, note: str) -> None:
+        """Record a transparent adjustment without scaling anything."""
+        self.adjustment = note
+        self.reasons.append(note)
+
+    # -------------------------------------------------------------- output
+    def build(self, *, evidenced: bool, note: str | None = None) -> ComponentScore:
+        if note:
+            self.reasons.append(note)
+        criteria = {key: quantize(value * self._factor) for key, value in self.awarded.items()}
+        total = quantize(sum(criteria.values()))
+        return ComponentScore(
+            name=self.component,
+            points=total,
+            max_points=self.weight,
+            reasons=list(self.reasons),
+            criteria=criteria,
+            missing=list(self.missing),
+            evidenced=evidenced,
+            adjustment=self.adjustment,
+        )
+
+
+# ==================================================== currency assessment
+@dataclass(frozen=True)
+class CurrencyAssessment:
+    """Is this product *currently* alive, and how well do we know?
+
+    Shared by the adoption, activity and recency components so that "current
+    usage", "activity & maintenance" and "momentum" all agree about the same
+    evidence instead of each re-deriving it.
+    """
+
+    #: Multiplier applied to adoption points (historical fame is discounted
+    #: when there is no evidence the product still runs).
+    factor: float
+    #: Stable label: ``current`` | ``accessible_stale`` | ``unknown`` | ``dead``.
+    state: str
+    reason: str
+    status: ToolStatus | None = None
+    accessible: bool | None = None
+    days_since_verification: int | None = None
+
+    @property
+    def is_dead(self) -> bool:
+        return self.state == "dead"
+
+    @property
+    def is_current(self) -> bool:
+        return self.state == "current"
+
+    @property
+    def has_current_evidence(self) -> bool:
+        """True when something we checked ourselves says it is alive today."""
+        return self.state in ("current", "accessible_stale")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "state": self.state,
+            "factor": self.factor,
+            "reason": self.reason,
+            "status": str(self.status) if self.status else None,
+            "accessible": self.accessible,
+            "days_since_verification": self.days_since_verification,
+        }
+
+
+def assess_currency(tool: Tool, today: date) -> CurrencyAssessment:
+    """Classify how current our evidence about ``tool`` is.
+
+    Deliberately conservative: *absence* of evidence is ``unknown`` (a heavy
+    discount), never ``current``. Only a fetched, accessible official site or
+    an explicitly live status can produce ``current``.
+    """
+    status = ToolStatus.coerce(tool.status) if tool.status is not None else None
+    accessible = tool.verification.is_accessible
+    days = _days_since(tool.last_verified_date, today)
+
+    if status in DEAD_STATUSES:
+        return CurrencyAssessment(
+            0.0,
+            "dead",
+            f"status '{status.value}' — the product is not currently operating",
+            status,
+            accessible,
+            days,
+        )
+    if accessible is False:
+        return CurrencyAssessment(
+            0.0,
+            "dead",
+            "official website is not accessible — no current-usage credit",
+            status,
+            accessible,
+            days,
+        )
+
+    if accessible is True:
+        if days is not None and days <= STALE_VERIFICATION_DAYS:
+            return CurrencyAssessment(
+                1.0,
+                "current",
+                f"official website verified accessible {days} day(s) ago",
+                status,
+                accessible,
+                days,
+            )
+        if days is None:
+            return CurrencyAssessment(
+                0.75,
+                "accessible_stale",
+                "official website accessible but the check was not dated",
+                status,
+                accessible,
+                days,
+            )
+        return CurrencyAssessment(
+            0.5,
+            "accessible_stale",
+            f"last verification is {days} day(s) old (> {STALE_VERIFICATION_DAYS})",
+            status,
+            accessible,
+            days,
+        )
+
+    # No accessibility evidence at all. A directory-claimed status is weak.
+    if status in LIVE_STATUSES and days is not None and days <= STALE_VERIFICATION_DAYS:
+        return CurrencyAssessment(
+            0.6,
+            "accessible_stale",
+            f"status '{status.value}' recorded {days} day(s) ago, "
+            "but accessibility was never confirmed",
+            status,
+            accessible,
+            days,
+        )
+    return CurrencyAssessment(
+        0.3,
+        "unknown",
+        "no current-accessibility evidence — adoption discounted, not assumed",
+        status,
+        accessible,
+        days,
+    )
+
+
+# =============================================================== scorer
 class QualityScorer:
-    """Computes the 100-point score for a :class:`Tool`."""
+    """Computes the 100-point score for a :class:`~src.models.tool.Tool`."""
 
     def __init__(self, config: ScoringConfig | None = None, *, today: date | None = None) -> None:
         self.config = config or get_settings().scoring
+        self._weight: Mapping[str, float] = {
+            name: float(value) for name, value in (self.config.weights or WEIGHTS).items()
+        }
+        # Fail loudly on a mis-configured rubric rather than silently scoring
+        # out of something other than 100.
+        validate_rubric(self._weight)
         self.today = today or datetime.now(timezone.utc).date()
-        self._weight = self.config.weights
 
     # --------------------------------------------------------------- public
     def score(self, tool: Tool) -> ScoreBreakdown:
         """Return a populated :class:`ScoreBreakdown` (does not mutate ``tool``)."""
+        currency = assess_currency(tool, self.today)
         components: list[ComponentScore] = [
             self._product_quality(tool),
             self._user_value(tool),
-            self._adoption(tool),
-            self._activity(tool),
+            self._adoption(tool, currency),
+            self._activity(tool, currency),
             self._maturity(tool),
-            self._recency(tool),
+            self._recency(tool, currency),
             self._differentiation(tool),
             self._information_quality(tool),
         ]
-        breakdown = ScoreBreakdown(
-            **{component.name: component.clamped() for component in components},
-            reasons={component.name: component.reasons for component in components},
-            unevidenced_components=[c.name for c in components if not c.evidenced],
+        by_name = {component.name: component for component in components}
+        if set(by_name) != set(COMPONENTS):  # pragma: no cover - guards a code change
+            raise AssertionError(
+                f"scorer must emit exactly the rubric components, got {sorted(by_name)}"
+            )
+
+        assessable = quantize(
+            sum(c.max_points for c in components if c.evidenced)
         )
-        return breakdown
+        return ScoreBreakdown(
+            **{name: component.clamped() for name, component in by_name.items()},
+            reasons={name: component.reasons for name, component in by_name.items()},
+            criteria={
+                name: dict(component.criteria) for name, component in by_name.items()
+            },
+            max_points={name: quantize(component.max_points) for name, component in by_name.items()},
+            missing_evidence=[
+                f"{name}.{key}"
+                for name in COMPONENTS
+                for key in by_name[name].missing
+            ],
+            unevidenced_components=[c.name for c in components if not c.evidenced],
+            adjustments={
+                name: component.adjustment
+                for name, component in by_name.items()
+                if component.adjustment
+            },
+            evidence_confidence=quantize(assessable / MAX_TOTAL, 3),
+            currency_state=currency.state,
+            currency_reason=currency.reason,
+        )
 
     def apply(self, tool: Tool) -> Tool:
-        """Score ``tool`` in place and reject it when it falls below the band."""
-        breakdown = self.score(tool)
-        tool.quality = breakdown
-        total = breakdown.total
-        if total < self.config.reject_below:
-            tool.reject(
-                RejectionReason.BELOW_SCORE_THRESHOLD,
-                f"score {total:.1f} < reject threshold {self.config.reject_below}",
-            )
-        elif total < self.config.include_at_or_above:
-            tool.flag_for_review(
-                f"score {total:.1f} is in the 'usually skip' band — needs curator decision"
-            )
+        """Score ``tool`` in place. Threshold decisions belong to the filter."""
+        tool.quality = self.score(tool)
         logger.debug(
             "scored tool",
-            extra={"tool": tool.name, "score": total, "band": str(breakdown.band)},
+            extra={
+                "tool": tool.name,
+                "score": tool.quality.total,
+                "band": str(tool.quality.band),
+                "currency": tool.quality.currency_state,
+            },
         )
         return tool
 
     def band_for(self, total: float) -> QualityBand:
-        bands = self.config.bands
-        if total >= bands.get("exceptional", 90):
+        bands = self.config.bands or BANDS
+        if total >= bands.get("exceptional", BANDS["exceptional"]):
             return QualityBand.EXCEPTIONAL
-        if total >= bands.get("excellent", 80):
+        if total >= bands.get("excellent", BANDS["excellent"]):
             return QualityBand.EXCELLENT
-        if total >= bands.get("good", 70):
+        if total >= bands.get("good", BANDS["good"]):
             return QualityBand.GOOD
-        if total >= bands.get("average", 60):
+        if total >= bands.get("average", BANDS["average"]):
             return QualityBand.AVERAGE
         return QualityBand.REJECT
 
     # ----------------------------------------------------------- components
     def _product_quality(self, tool: Tool) -> ComponentScore:
         """25 pts — depth of verified capability, not marketing copy."""
-        maximum = self._weight["product_quality_capability"]
-        reasons: list[str] = []
-        points = 0.0
+        b = _ComponentBuilder("product_quality_capability", self._weight)
 
-        feature_count = len(tool.key_features)
-        feature_points = min(feature_count, 6) / 6 * (maximum * 0.32)
-        if feature_count:
-            reasons.append(f"{feature_count} verified key feature(s)")
-        points += feature_points
+        features = len(tool.key_features)
+        b.graded("key_features", features, 6, f"{features} verified key feature(s)")
 
-        capability_count = len(tool.ai_capabilities)
-        points += min(capability_count, 4) / 4 * (maximum * 0.24)
-        if capability_count:
-            reasons.append(f"{capability_count} identified AI capability(ies)")
+        capabilities = len(tool.ai_capabilities)
+        b.graded(
+            "ai_capabilities", capabilities, 4, f"{capabilities} identified AI capability(ies)"
+        )
 
         # Specific I/O is a strong quality proxy and is mandated by §9.
         if tool.inputs and tool.outputs:
-            points += maximum * 0.2
-            reasons.append(f"specific I/O declared ({len(tool.inputs)} in / {len(tool.outputs)} out)")
+            b.award(
+                "specific_io",
+                1.0,
+                f"specific I/O declared ({len(tool.inputs)} in / {len(tool.outputs)} out)",
+            )
         elif tool.inputs or tool.outputs:
-            points += maximum * 0.08
-            reasons.append("partial I/O information")
+            b.award("specific_io", 0.4, "partial I/O information only")
+        else:
+            b.miss("specific_io", "no verified input/output formats")
 
-        if len(tool.platforms) >= 2:
-            points += maximum * 0.08
-            reasons.append(f"multi-platform ({len(tool.platforms)} platforms)")
-        elif tool.platforms:
-            points += maximum * 0.04
+        platforms = len(tool.platforms)
+        if platforms >= 2:
+            b.award("platforms", 1.0, f"multi-platform ({platforms} platforms)")
+        elif platforms:
+            b.award("platforms", 0.5, "single platform")
+        else:
+            b.miss("platforms")
 
         if tool.has_api:
-            points += maximum * 0.08
-            reasons.append("public API available")
-        if tool.integrations:
-            points += min(len(tool.integrations), 5) / 5 * (maximum * 0.08)
-            reasons.append(f"{len(tool.integrations)} integration(s)")
+            b.award("public_api", 1.0, "public API available")
+        else:
+            b.miss("public_api")
 
-        evidenced = bool(tool.key_features or tool.ai_capabilities or tool.inputs)
-        if not evidenced:
-            reasons.append("no verified capability evidence — scored conservatively")
-        return ComponentScore("product_quality_capability", points, maximum, reasons, evidenced)
+        integrations = len(tool.integrations)
+        b.graded("integrations", integrations, 5, f"{integrations} integration(s)")
+
+        evidenced = bool(
+            tool.key_features or tool.ai_capabilities or tool.inputs or tool.outputs
+        )
+        return b.build(
+            evidenced=evidenced,
+            note=None
+            if evidenced
+            else "no verified capability evidence — component scored on nothing",
+        )
 
     def _user_value(self, tool: Tool) -> ComponentScore:
         """20 pts — does it solve a meaningful problem for a real user?"""
-        maximum = self._weight["real_user_value"]
-        reasons: list[str] = []
-        points = 0.0
+        b = _ComponentBuilder("real_user_value", self._weight)
 
         if tool.primary_task:
-            points += maximum * 0.25
-            reasons.append(f"clear primary task: {tool.primary_task}")
-        use_case_count = len(tool.use_cases)
-        points += min(use_case_count, 4) / 4 * (maximum * 0.25)
-        if use_case_count:
-            reasons.append(f"{use_case_count} documented use case(s)")
+            b.award("primary_task", 1.0, f"clear primary task: {tool.primary_task}")
+        else:
+            b.miss("primary_task", "no primary task identified")
 
-        if tool.detailed_overview and len(tool.detailed_overview) >= 300:
-            points += maximum * 0.2
-            reasons.append("substantive product overview")
+        use_cases = len(tool.use_cases)
+        b.graded("use_cases", use_cases, 4, f"{use_cases} documented use case(s)")
+
+        overview = tool.detailed_overview or ""
+        if len(overview) >= 300:
+            b.award("overview_depth", 1.0, "substantive product overview")
+        elif len(overview) >= 120:
+            b.award("overview_depth", 0.5, "short product overview")
         elif tool.short_description:
-            points += maximum * 0.08
+            b.award("overview_depth", 0.25, "tagline only")
+        else:
+            b.miss("overview_depth", "no product description")
 
-        if tool.pros:
-            points += min(len(tool.pros), 3) / 3 * (maximum * 0.1)
-            reasons.append(f"{len(tool.pros)} curated pro(s)")
+        b.graded("pros", len(tool.pros), 3, f"{len(tool.pros)} curated pro(s)")
+
         # Honest limitations are a value signal, not a penalty.
         if tool.cons or tool.limitations:
-            points += maximum * 0.1
-            reasons.append("limitations documented honestly")
+            b.award("limitations", 1.0, "limitations documented honestly")
+        else:
+            b.miss("limitations")
 
         if tool.pricing.has_free_plan or tool.pricing.has_free_trial:
-            points += maximum * 0.1
-            reasons.append("low-friction access (free plan or trial)")
+            b.award("low_friction_access", 1.0, "low-friction access (free plan or trial)")
+        else:
+            b.miss("low_friction_access")
+
+        if tool.pricing.model:
+            b.award("pricing_transparency", 1.0, "pricing is published")
+        else:
+            b.miss("pricing_transparency")
 
         evidenced = bool(tool.primary_task or tool.use_cases or tool.detailed_overview)
-        if not evidenced:
-            reasons.append("no verified user-value evidence — scored conservatively")
-        return ComponentScore("real_user_value", points, maximum, reasons, evidenced)
+        return b.build(
+            evidenced=evidenced,
+            note=None
+            if evidenced
+            else "no verified user-value evidence — component scored on nothing",
+        )
 
-    def _adoption(self, tool: Tool) -> ComponentScore:
-        """15 pts — current usage. Unknown adoption scores 0, never a guess."""
-        maximum = self._weight["current_usage_adoption"]
-        reasons: list[str] = []
-        points = 0.0
+    def _adoption(self, tool: Tool, currency: CurrencyAssessment) -> ComponentScore:
+        """15 pts — **current** usage. Unknown adoption scores 0, never a guess."""
+        b = _ComponentBuilder("current_usage_adoption", self._weight)
         adoption = tool.adoption
 
-        points += self._tiered(
+        b.tiered(
+            "monthly_visits",
             adoption.monthly_visits,
-            [(5_000_000, 1.0), (1_000_000, 0.85), (250_000, 0.65), (50_000, 0.45), (10_000, 0.25)],
-            maximum * 0.4,
-            reasons,
+            ((5_000_000, 1.0), (1_000_000, 0.85), (250_000, 0.65), (50_000, 0.45), (10_000, 0.25)),
             "monthly visits",
         )
-        points += self._tiered(
+        b.tiered(
+            "github_stars",
             adoption.github_stars,
-            [(20_000, 1.0), (5_000, 0.8), (1_000, 0.55), (200, 0.3)],
-            maximum * 0.2,
-            reasons,
+            ((20_000, 1.0), (5_000, 0.8), (1_000, 0.55), (200, 0.3)),
             "GitHub stars",
         )
-        points += self._tiered(
+        b.tiered(
+            "product_hunt_upvotes",
             adoption.product_hunt_upvotes,
-            [(2_000, 1.0), (750, 0.75), (250, 0.5), (50, 0.25)],
-            maximum * 0.15,
-            reasons,
+            ((2_000, 1.0), (750, 0.75), (250, 0.5), (50, 0.25)),
             "Product Hunt upvotes",
         )
-        points += self._tiered(
+        b.tiered(
+            "directory_signals",
             adoption.directory_saves or adoption.directory_upvotes,
-            [(10_000, 1.0), (2_500, 0.7), (500, 0.45), (100, 0.2)],
-            maximum * 0.1,
-            reasons,
-            "directory saves",
+            ((10_000, 1.0), (2_500, 0.7), (500, 0.45), (100, 0.2)),
+            "directory saves/upvotes",
         )
         if adoption.review_count and adoption.review_rating:
-            share = min(adoption.review_count, 500) / 500
+            volume = min(adoption.review_count, 500) / 500
             quality = max(0.0, (adoption.review_rating - 3.0) / 2.0)
-            points += share * quality * (maximum * 0.1)
-            reasons.append(
-                f"{adoption.review_count} reviews at {adoption.review_rating}/5"
-                + (f" on {adoption.review_platform}" if adoption.review_platform else "")
+            platform = f" on {adoption.review_platform}" if adoption.review_platform else ""
+            b.award(
+                "reviews",
+                volume * quality,
+                f"{adoption.review_count} reviews at {adoption.review_rating}/5{platform}",
             )
-        if adoption.notable_customers:
-            points += min(len(adoption.notable_customers), 5) / 5 * (maximum * 0.05)
-            reasons.append(f"{len(adoption.notable_customers)} notable customer(s)")
+        else:
+            b.miss("reviews")
 
-        # Multi-directory presence is weak corroboration, not adoption proof.
-        listing_count = len(tool.discovery_sources)
-        if listing_count >= 3:
-            points += maximum * 0.05
-            reasons.append(f"listed in {listing_count} approved directories")
+        customers = len(adoption.notable_customers)
+        b.graded("notable_customers", customers, 5, f"{customers} notable customer(s)")
 
-        evidenced = adoption.has_any_signal
-        if not evidenced:
-            reasons.append("no verifiable adoption signal — scored 0 rather than assumed")
-        return ComponentScore("current_usage_adoption", points, maximum, reasons, evidenced)
+        # "Current usage" has to be current: historical popularity is
+        # discounted when nothing shows the product still runs today.
+        if currency.factor < 1.0:
+            b.discount(
+                currency.factor,
+                f"adoption discounted x{currency.factor:g} — {currency.reason}",
+            )
 
-    def _activity(self, tool: Tool) -> ComponentScore:
+        evidenced = bool(adoption.has_any_signal)
+        return b.build(
+            evidenced=evidenced,
+            note=None
+            if evidenced
+            else "no verifiable adoption signal — scored 0 rather than assumed",
+        )
+
+    def _activity(self, tool: Tool, currency: CurrencyAssessment) -> ComponentScore:
         """15 pts — is the product still being maintained? (§6)"""
-        maximum = self._weight["activity_maintenance"]
-        reasons: list[str] = []
-        points = 0.0
+        b = _ComponentBuilder("activity_maintenance", self._weight)
+        status = currency.status
 
-        status = _status_of(tool)
-        if status in (ToolStatus.ACTIVE, ToolStatus.BETA):
-            points += maximum * 0.4
-            reasons.append(f"status '{status.value}'")
-        elif status in (ToolStatus.ALPHA, ToolStatus.WAITLIST):
-            points += maximum * 0.2
-            reasons.append(f"status '{status.value}' (pre-GA)")
-        elif status in (ToolStatus.DEPRECATED, ToolStatus.DISCONTINUED, ToolStatus.INACCESSIBLE):
-            reasons.append(f"status '{status.value}' — no activity credit")
+        if status in LIVE_STATUSES:
+            b.award("operational_status", 1.0, f"status '{status.value}'")
+        elif status in PRE_GA_STATUSES:
+            b.award("operational_status", 0.5, f"status '{status.value}' (pre-GA)")
+        elif status in DEAD_STATUSES:
+            b.miss("operational_status", f"status '{status.value}' — no activity credit")
+        else:
+            b.miss("operational_status", "operational status unknown")
 
-        if tool.verification.is_accessible:
-            points += maximum * 0.2
-            reasons.append("official website verified accessible")
-        elif tool.verification.is_accessible is False:
-            reasons.append("official website not accessible")
+        if currency.accessible is True:
+            b.award("site_accessible", 1.0, "official website verified accessible")
+        elif currency.accessible is False:
+            b.miss("site_accessible", "official website not accessible")
+        else:
+            b.miss("site_accessible", "official website accessibility never checked")
 
-        days = _days_since(tool.last_verified_date, self.today)
-        if days is not None and days <= 30:
-            points += maximum * 0.2
-            reasons.append(f"verified {days} day(s) ago")
-        elif days is not None and days <= 90:
-            points += maximum * 0.1
-            reasons.append(f"verified {days} day(s) ago")
+        days = currency.days_since_verification
+        if days is None:
+            b.miss("verification_freshness", "never verified by us")
+        elif days <= 30:
+            b.award("verification_freshness", 1.0, f"verified {days} day(s) ago")
+        elif days <= FRESH_VERIFICATION_DAYS:
+            b.award("verification_freshness", 0.6, f"verified {days} day(s) ago")
+        elif days <= STALE_VERIFICATION_DAYS:
+            b.award("verification_freshness", 0.3, f"verified {days} day(s) ago")
+        else:
+            b.miss("verification_freshness", f"last verification is {days} day(s) old")
 
         if tool.version:
-            points += maximum * 0.1
-            reasons.append(f"published version {tool.version}")
-        if tool.pricing.pricing_verified_at:
-            points += maximum * 0.1
-            reasons.append("current pricing verified")
+            b.award("version_published", 1.0, f"published version {tool.version}")
+        else:
+            b.miss("version_published")
 
-        evidenced = bool(status or tool.last_verified_date or tool.verification.is_accessible is not None)
-        if not evidenced:
-            reasons.append("no maintenance evidence — scored conservatively")
-        return ComponentScore("activity_maintenance", points, maximum, reasons, evidenced)
+        priced_days = _days_since(tool.pricing.pricing_verified_at, self.today)
+        if priced_days is not None and priced_days <= STALE_VERIFICATION_DAYS:
+            b.award("pricing_verified", 1.0, "current pricing verified")
+        elif priced_days is not None:
+            b.award("pricing_verified", 0.3, f"pricing check is {priced_days} day(s) old")
+        else:
+            b.miss("pricing_verified")
+
+        evidenced = bool(
+            status is not None
+            or currency.accessible is not None
+            or tool.last_verified_date is not None
+        )
+        return b.build(
+            evidenced=evidenced,
+            note=None
+            if evidenced
+            else "no maintenance evidence at all — scored 0 rather than assumed active",
+        )
 
     def _maturity(self, tool: Tool) -> ComponentScore:
         """10 pts — reliability signals of an established product."""
-        maximum = self._weight["product_maturity_reliability"]
-        reasons: list[str] = []
-        points = 0.0
+        b = _ComponentBuilder("product_maturity_reliability", self._weight)
 
         if tool.company:
-            points += maximum * 0.2
-            reasons.append(f"identified developer: {tool.company}")
-        if tool.website:
-            points += maximum * 0.1
+            b.award("company_identified", 1.0, f"identified developer: {tool.company}")
+        else:
+            b.miss("company_identified", "developer/company unknown")
+
         if tool.pricing.model:
-            points += maximum * 0.2
-            reasons.append(f"published pricing model '{tool.pricing.model}'")
+            b.award(
+                "pricing_model", 1.0, f"published pricing model '{tool.pricing.model}'"
+            )
+        else:
+            b.miss("pricing_model")
+
         if tool.has_api and tool.api_docs_url:
-            points += maximum * 0.15
-            reasons.append("documented API")
-        if tool.open_source_status in (
-            OpenSourceStatus.OPEN_SOURCE, OpenSourceStatus.OPEN_SOURCE.value,
-        ) and tool.repository_url:
-            points += maximum * 0.1
-            reasons.append("open source with public repository")
-        age_days = _days_since(tool.launch_date, self.today)
-        if age_days is not None and age_days >= 365:
-            points += maximum * 0.15
-            reasons.append(f"operating for {age_days // 365} year(s)")
-        elif age_days is not None and age_days >= 180:
-            points += maximum * 0.08
-        if tool.country:
-            points += maximum * 0.1
-            reasons.append("company location known")
+            b.award("documented_api", 1.0, "documented API")
+        else:
+            b.miss("documented_api")
 
-        evidenced = bool(tool.company or tool.pricing.model or tool.launch_date)
-        if not evidenced:
-            reasons.append("no maturity evidence — scored conservatively")
-        return ComponentScore("product_maturity_reliability", points, maximum, reasons, evidenced)
-
-    def _recency(self, tool: Tool) -> ComponentScore:
-        """5 pts — "Recently launched and gaining real usage" (§1, §6)."""
-        maximum = self._weight["recency_momentum"]
-        reasons: list[str] = []
-        points = 0.0
+        if _is_open_source(tool) and tool.repository_url:
+            b.award("open_source_repo", 1.0, "open source with a public repository")
+        else:
+            b.miss("open_source_repo")
 
         age_days = _days_since(tool.launch_date, self.today)
         if age_days is None:
-            reasons.append("launch date unverified — no recency credit")
-            return ComponentScore("recency_momentum", 0.0, maximum, reasons, evidenced=False)
+            b.miss("operating_history", "launch date unverified")
+        elif age_days >= 730:
+            b.award("operating_history", 1.0, f"operating for {age_days // 365} year(s)")
+        elif age_days >= 365:
+            b.award("operating_history", 0.7, "operating for over a year")
+        elif age_days >= 180:
+            b.award("operating_history", 0.4, "operating for over six months")
+        else:
+            b.award("operating_history", 0.2, "recently launched — limited track record")
+
+        if tool.country:
+            b.award("company_location", 1.0, "company location known")
+        else:
+            b.miss("company_location")
+
+        if tool.website:
+            b.award("official_site", 1.0, "official website recorded")
+        else:
+            b.miss("official_site", "no official website recorded")
+
+        evidenced = bool(tool.company or tool.pricing.model or tool.launch_date)
+        return b.build(
+            evidenced=evidenced,
+            note=None
+            if evidenced
+            else "no maturity evidence — component scored on nothing",
+        )
+
+    def _recency(self, tool: Tool, currency: CurrencyAssessment) -> ComponentScore:
+        """5 pts — "recently launched and gaining real usage" (§1, §6).
+
+        Momentum requires *both* a recent launch and evidence the product is
+        still running. An old product earns nothing here, and a dead one earns
+        nothing regardless of how recently it launched.
+        """
+        b = _ComponentBuilder("recency_momentum", self._weight)
+        age_days = _days_since(tool.launch_date, self.today)
+
+        if currency.is_dead:
+            b.miss("launch_recency", f"no momentum credit — {currency.reason}")
+            return b.build(evidenced=age_days is not None)
+
+        if age_days is None:
+            b.miss("launch_recency", "launch date unverified — no recency credit")
+            return b.build(evidenced=False)
 
         if age_days <= 180:
-            points = maximum
-            reasons.append(f"launched {age_days} day(s) ago")
+            fraction, why = 1.0, f"launched {age_days} day(s) ago"
         elif age_days <= 365:
-            points = maximum * 0.8
-            reasons.append("launched within the last year")
+            fraction, why = 0.8, "launched within the last year"
         elif age_days <= 730:
-            points = maximum * 0.55
-            reasons.append("launched within the last two years")
+            fraction, why = 0.55, "launched within the last two years"
         elif age_days <= 1460:
-            points = maximum * 0.3
+            fraction, why = 0.3, "launched within the last four years"
         else:
-            # Older tools still qualify when adoption is strong (§3, §6).
-            points = maximum * 0.15 if tool.adoption.has_any_signal else 0.0
-            reasons.append(
-                "older product; credit only via ongoing adoption"
-                if tool.adoption.has_any_signal
-                else "older product without adoption evidence"
-            )
-        if tool.launch_date_precision == "year" and points > 0:
-            points *= 0.9
-            reasons.append("launch date only known to year precision")
-        return ComponentScore("recency_momentum", points, maximum, reasons)
+            # Older products earn momentum only from *current*, evidenced use.
+            if tool.adoption.has_any_signal and currency.has_current_evidence:
+                fraction, why = 0.15, "older product with current, evidenced usage"
+            else:
+                fraction, why = 0.0, "older product without current-usage evidence"
+
+        # A launch date known only to the year is weaker evidence.
+        if fraction and tool.launch_date_precision == "year":
+            fraction *= 0.9
+            why = f"{why} (year-precision launch date)"
+
+        # Unconfirmed liveness cannot grant full momentum either.
+        if fraction and not currency.has_current_evidence:
+            fraction *= 0.5
+            b.note_adjustment(f"momentum halved — {currency.reason}")
+
+        if fraction:
+            b.award("launch_recency", fraction, why)
+        else:
+            b.miss("launch_recency", why)
+        return b.build(evidenced=True)
 
     def _differentiation(self, tool: Tool) -> ComponentScore:
-        """5 pts — "Clearly differentiated or genuinely useful" (§1, §4)."""
-        maximum = self._weight["differentiation"]
-        reasons: list[str] = []
-        points = 0.0
+        """5 pts — "clearly differentiated or genuinely useful" (§1, §4)."""
+        b = _ComponentBuilder("differentiation", self._weight)
 
         if tool.aiorbit_summary:
-            points += maximum * 0.3
-            reasons.append("editorial verdict written from verified facts")
+            b.award("editorial_verdict", 1.0, "editorial verdict written from verified facts")
+        else:
+            b.miss("editorial_verdict")
+
         if len(tool.key_features) >= 4:
-            points += maximum * 0.2
-            reasons.append("feature depth suggests a distinct product")
-        if tool.open_source_status in (
-            OpenSourceStatus.OPEN_SOURCE, OpenSourceStatus.OPEN_SOURCE.value,
-        ):
-            points += maximum * 0.1
-            reasons.append("open source differentiation")
-        if tool.has_api:
-            points += maximum * 0.1
-            reasons.append("programmatic access differentiates from UI-only clones")
+            b.award("feature_depth", 1.0, "feature depth suggests a distinct product")
+        elif len(tool.key_features) >= 2:
+            b.award("feature_depth", 0.5, "some feature detail")
+        else:
+            b.miss("feature_depth")
+
         if len(tool.ai_capabilities) >= 3:
-            points += maximum * 0.2
-            reasons.append("multi-capability product")
+            b.award("capability_breadth", 1.0, "multi-capability product")
+        elif len(tool.ai_capabilities) >= 2:
+            b.award("capability_breadth", 0.5, "two identified capabilities")
+        else:
+            b.miss("capability_breadth")
+
+        if _is_open_source(tool):
+            b.award("open_source", 1.0, "open source differentiation")
+        else:
+            b.miss("open_source")
+
+        if tool.has_api:
+            b.award("programmatic_access", 1.0, "programmatic access differentiates from UI-only clones")
+        else:
+            b.miss("programmatic_access")
+
         if tool.adoption.funding_raised_usd:
-            points += maximum * 0.1
-            reasons.append("verified funding indicates a real company")
+            b.award("funding", 1.0, "verified funding indicates a real company")
+        else:
+            b.miss("funding")
+
+        if tool.adoption.notable_customers:
+            b.award("customer_proof", 1.0, "named customers")
+        else:
+            b.miss("customer_proof")
 
         evidenced = bool(tool.key_features or tool.ai_capabilities or tool.aiorbit_summary)
-        if not evidenced:
-            reasons.append("cannot assess differentiation without verified detail")
-        return ComponentScore("differentiation", points, maximum, reasons, evidenced)
+        return b.build(
+            evidenced=evidenced,
+            note=None
+            if evidenced
+            else "cannot assess differentiation without verified detail",
+        )
 
     def _information_quality(self, tool: Tool) -> ComponentScore:
         """5 pts — can we actually stand behind this record? (§8, §10)"""
-        maximum = self._weight["information_quality_verifiability"]
-        reasons: list[str] = []
-        points = 0.0
-
+        b = _ComponentBuilder("information_quality_verifiability", self._weight)
         status = tool.verification.status
+
         if status in (VerificationStatus.VERIFIED, VerificationStatus.VERIFIED.value):
-            points += maximum * 0.4
-            reasons.append("verified against the official website")
+            b.award("verification_status", 1.0, "verified against the official website")
         elif status in (
-            VerificationStatus.PARTIALLY_VERIFIED, VerificationStatus.PARTIALLY_VERIFIED.value,
+            VerificationStatus.PARTIALLY_VERIFIED,
+            VerificationStatus.PARTIALLY_VERIFIED.value,
         ):
-            points += maximum * 0.2
-            reasons.append("partially verified")
+            b.award("verification_status", 0.5, "partially verified")
         else:
-            reasons.append(f"verification status '{status}'")
+            b.miss("verification_status", f"verification status '{status}'")
 
         completeness = tool.completeness()
-        points += completeness * (maximum * 0.3)
-        reasons.append(f"field completeness {completeness:.0%}")
+        if completeness:
+            b.award("field_completeness", completeness, f"field completeness {completeness:.0%}")
+        else:
+            b.miss("field_completeness")
 
-        if len(tool.discovery_sources) >= 2:
-            points += maximum * 0.15
-            reasons.append(f"corroborated by {len(tool.discovery_sources)} sources")
-        elif tool.discovery_sources:
-            points += maximum * 0.05
+        sources = len(tool.discovery_sources)
+        if sources >= 2:
+            b.award("source_corroboration", 1.0, f"corroborated by {sources} sources")
+        elif sources == 1:
+            b.award("source_corroboration", 0.35, "single discovery source")
+        else:
+            b.miss("source_corroboration", "no discovery provenance recorded")
+
         if tool.verification.verification_sources:
-            points += maximum * 0.15
-            reasons.append("verification source recorded")
+            b.award("verification_source", 1.0, "verification source recorded")
+        else:
+            b.miss("verification_source")
 
-        return ComponentScore("information_quality_verifiability", points, maximum, reasons)
+        days = _days_since(tool.last_verified_date, self.today)
+        if days is not None and days <= FRESH_VERIFICATION_DAYS:
+            b.award("verification_recent", 1.0, f"verification is {days} day(s) old")
+        elif days is not None and days <= STALE_VERIFICATION_DAYS:
+            b.award("verification_recent", 0.5, f"verification is {days} day(s) old")
+        else:
+            b.miss("verification_recent", "no recent verification date")
 
-    # -------------------------------------------------------------- utility
-    @staticmethod
-    def _tiered(
-        value: int | float | None,
-        tiers: list[tuple[int, float]],
-        maximum: float,
-        reasons: list[str],
-        label: str,
-    ) -> float:
-        """Award points from a descending tier table; ``None`` scores nothing."""
-        if not value:
-            return 0.0
-        for threshold, fraction in tiers:
-            if value >= threshold:
-                reasons.append(f"{label}: {value:,}")
-                return maximum * fraction
-        return 0.0
+        # This component is always assessable: "we could not verify it" is
+        # itself the finding.
+        return b.build(evidenced=True)
 
 
-def _status_of(tool: Tool) -> ToolStatus | None:
-    return ToolStatus.coerce(tool.status) if tool.status is not None else None
+# ------------------------------------------------------------------ helpers
+def _is_open_source(tool: Tool) -> bool:
+    return tool.open_source_status in (
+        OpenSourceStatus.OPEN_SOURCE,
+        OpenSourceStatus.OPEN_SOURCE.value,
+    )
 
 
 def _days_since(value: date | None, today: date) -> int | None:
+    """Whole days between ``value`` and ``today``; ``None`` when unknown.
+
+    A future date returns ``None`` rather than a negative age: it is bad data,
+    and bad data must not become credit.
+    """
     if value is None:
         return None
     if isinstance(value, datetime):
@@ -496,10 +875,17 @@ def rank_and_select(
 
     Returns ``(selected, not_selected)``. Never pads to reach the target:
     "If only 800 tools genuinely meet the standard ... submit 800."
+
+    ``min_score`` defaults to ``skip_below`` (70), i.e. the lowest score the
+    guideline allows into a batch at all. Whether a 70-79 record is *actually*
+    admitted is decided earlier, by :class:`src.scoring.filter.QualityFilter`,
+    which gates it on evidence; selection must not silently re-open that
+    decision, and it must never relax it to reach the target.
     """
     settings = get_settings()
     target_size = target_size or settings.batch.target_size
-    min_score = settings.scoring.include_at_or_above if min_score is None else min_score
+    if min_score is None:
+        min_score = getattr(settings.scoring, "skip_below", SKIP_BELOW)
     if max_per_primary_task is None:
         max_per_primary_task = settings.batch.max_per_primary_task
 
@@ -515,7 +901,9 @@ def rank_and_select(
 
     selected: list[Tool] = []
     rejected: list[Tool] = [
-        tool for tool in tools if tool.rejected or tool.quality is None or tool.quality.total < min_score
+        tool
+        for tool in tools
+        if tool.rejected or tool.quality is None or tool.quality.total < min_score
     ]
     per_task: dict[str, int] = {}
 
