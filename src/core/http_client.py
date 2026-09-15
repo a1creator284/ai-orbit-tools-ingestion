@@ -19,7 +19,6 @@ import hashlib
 import json
 import random
 import time
-import urllib.robotparser
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -31,6 +30,7 @@ import requests
 from src.core.config import HttpConfig, get_settings
 from src.core.errors import FetchError
 from src.core.logging_setup import get_logger
+from src.core.robots import RobotsRules
 from src.core.urls import normalize_url
 
 logger = get_logger("http")
@@ -213,10 +213,10 @@ class HttpClient:
             if self.config.cache_enabled
             else None
         )
-        self._robots: dict[str, urllib.robotparser.RobotFileParser | None] = {}
+        self._robots: dict[str, RobotsRules | None] = {}
 
     # ----------------------------------------------------------- robots.txt
-    def _fetch_robots(self, origin: str) -> urllib.robotparser.RobotFileParser | None:
+    def _fetch_robots(self, origin: str) -> RobotsRules | None:
         """Read ``origin/robots.txt`` through *our own* session.
 
         ``RobotFileParser.read()`` is deliberately **not** used: it fetches via
@@ -232,6 +232,11 @@ class HttpClient:
         treat as "no restriction found" — the long-standing documented intent
         of "unreachable robots => allow". A 4xx (including 401/403/404) means
         no usable rules exist; RFC 9309 says 4xx implies unrestricted access.
+
+        Rules are parsed by :class:`~src.core.robots.RobotsRules` rather than
+        ``urllib.robotparser``, which on Python <= 3.12 drops every rule after
+        a blank line *and* honours the first match instead of the longest one.
+        Both defects silently turned real ``Disallow`` rules into "crawlable".
         """
         try:
             response = self.session.get(
@@ -251,27 +256,28 @@ class HttpClient:
             logger.debug("robots.txt not usable", extra={"origin": origin, "status": status})
             return None
 
-        parser = urllib.robotparser.RobotFileParser()
         try:
-            parser.parse((response.text or "").splitlines())
+            return RobotsRules.parse(response.text or "")
         except Exception:  # noqa: BLE001 - unparseable robots => no rules found
+            logger.debug("robots.txt unparseable", extra={"origin": origin})
             return None
-        return parser
 
     def _robots_allows(self, url: str) -> bool:
         if not self.config.respect_robots_txt:
             return True
         parts = urlsplit(url)
         origin = f"{parts.scheme}://{parts.netloc}"
-        parser = self._robots.get(origin, "missing")  # type: ignore[arg-type]
-        if parser == "missing":
-            parser = self._fetch_robots(origin)
-            self._robots[origin] = parser
-        if parser is None:
+        # ``None`` is a meaningful cached value ("no usable rules"), so
+        # membership decides whether to fetch — never a falsy check, which
+        # would re-request robots.txt on every call.
+        if origin not in self._robots:
+            self._robots[origin] = self._fetch_robots(origin)
+        rules = self._robots[origin]
+        if rules is None:
             return True
         try:
-            return parser.can_fetch(self.config.user_agent, url)
-        except Exception:  # noqa: BLE001
+            return rules.can_fetch(self.config.user_agent, url)
+        except Exception:  # noqa: BLE001 - a matcher failure must not invent a ban
             return True
 
     # ---------------------------------------------------------------- fetch

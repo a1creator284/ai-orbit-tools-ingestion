@@ -297,6 +297,65 @@ relaxation of a verification rule to make a difficult live page pass.
 
 ---
 
+### Run #9 — robots.txt regression fixed (this run)
+
+**Unit 9.1 — replace `urllib.robotparser` with an RFC 9309 matcher**
+
+Run #8 left exactly one failing test:
+`tests/test_http_robots.py::test_real_disallow_rule_is_still_enforced`
+(233 passed, 1 failed). No live work was done in this run — no crawl, no
+verification pass, no change to scoring, enrichment, dedup or discovery.
+
+**Root cause — the stdlib parser was silently under-enforcing robots rules.**
+The test failure was *not* a bad fixture. `tests/fixtures/robots_allow_root.txt`
+is an ordinary real-world file, and `urllib.robotparser` mis-reads it in two
+independent ways:
+
+1. **A blank line truncated the group (Python ≤ 3.12).** `parse()` treated an
+   empty line as a group terminator, so the group ended after `Allow: /` and
+   **all four `Disallow` rules were discarded** — leaving `entries=[]` and a
+   `default_entry` holding only `('/', True)`. That is exactly the reported
+   diagnostic. RFC 9309 §2.2 delimits groups by `user-agent` lines, not by
+   blank lines.
+2. **First-match instead of longest-match (Python ≤ 3.12).**
+   `Entry.allowance` returned the *first* matching rule, so `Allow: /` written
+   above `Disallow: /api/` won for every path — even with the blank line
+   removed. RFC 9309 §2.2.2 requires the **most specific** (longest) pattern to
+   win, with `allow` breaking an exact tie.
+
+Python 3.13 rewrote `parse()` and `allowance()` to fix both, which is why the
+same fixture answers `can_fetch('/api/private') == False` on 3.13 and `True` on
+3.12. The suite was therefore **interpreter-dependent**: the test was right and
+the parser was wrong, and on ≤ 3.12 the crawler would have requested paths that
+real sites explicitly disallow — a genuine politeness defect, the opposite of
+Run #7's false-prohibition bug.
+
+**Fix.** Robots matching moved into a new `src/core/robots.py`
+(`RobotsRules.parse` / `can_fetch`), a small dependency-free RFC 9309 matcher:
+groups delimited by `user-agent` lines only, longest-pattern precedence with
+`allow`-wins ties, `*` wildcards and `$` anchors, most-specific group
+selection, and percent-decoding on both sides. Identical answers on every
+interpreter. The fixture was **not** weakened — it is unchanged, blank line
+included, and is now asserted to keep that blank line so the regression cannot
+silently return.
+
+**Run #7's intent is preserved exactly.** Only explicitly published rules can
+block: robots 4xx/5xx, network errors, empty bodies and unparseable bodies all
+still mean "no restriction found" and still allow the fetch, and robots.txt is
+still fetched with the configured UA through our own session. What changed is
+only that valid `Disallow` rules are now actually enforced.
+
+One latent bug was fixed alongside it: the per-origin rules cache used a
+`"missing"` string sentinel compared with `==`, so a cached `None` ("no usable
+rules") was re-fetched on every call. It now uses an explicit `in` membership
+check, which the once-per-origin test covers.
+
+Not done, by design: no new feature, no bulk crawl, no change to live
+verification limits, and no change to scoring, enrichment, LLM descriptions,
+dedup or discovery.
+
+---
+
 ## Tests
 
 | Suite | Count |
@@ -306,7 +365,26 @@ relaxation of a verification rule to make a difficult live page pass.
 | After Units 4.2 + 4.3 (`test_candidate_prepare.py` +28, `test_logging_setup.py` +6) | 127 passed |
 | After Unit 5.1 (`tests/test_verification_official_site.py`, +41) | 168 passed |
 | After Unit 6.1 (`tests/test_verification_pipeline_wiring.py`, +38) | 206 passed |
-| After Unit 7.1 (`tests/test_http_robots.py`, +15) | **221 passed** |
+| After Unit 7.1 (`tests/test_http_robots.py`, +15) | 221 passed |
+| After Run #8 (live verification fixes) | 233 passed, **1 failed** |
+| After Unit 9.1 (`tests/test_robots_rules.py` +19, `test_http_robots.py` +6) | **259 passed** |
+
+**Run #9 result: 259 passed, 0 failed** — the one pre-existing failure
+(`test_real_disallow_rule_is_still_enforced`) is fixed at its root rather than
+by relaxing the assertion. Focused robots run:
+`tests/test_http_robots.py` + `tests/test_robots_rules.py` = **40 passed**.
+
+The 19 new tests in `tests/test_robots_rules.py` pin the rule semantics the
+stdlib got wrong — blank lines inside a group do not discard later rules,
+longest-match wins regardless of rule order, a deeper `Allow` re-opens a
+subtree, exact ties favour access, `*`/`$` patterns, literal treatment of regex
+metacharacters, percent-encoded paths, group selection (named group beats `*`,
+`*` applies to unnamed agents, stacked `user-agent` lines share one rule set),
+and that an empty `Disallow:` or a rule with no `user-agent` line bans nothing.
+The 6 new transport tests assert all four of the fixture's disallowed prefixes
+are enforced end-to-end through `HttpClient`, that public paths stay fetchable
+(`/apixyz` is not blocked by `/api/`), and that an unparseable robots body
+allows the fetch.
 
 **Run #7 deterministic results** (as opposed to the live observations above):
 the robots.txt bug is pinned by 15 new offline tests in
@@ -389,6 +467,11 @@ cleanly. No network access, no live directory calls.
   fix (this commit). `data/interim/candidates_verified.jsonl` and
   `candidates_verification_report.json` are committed as the preserved
   evidence of live pass B (`live: true` on every row).
+* Run #7 checkpoint: `ad47d8d`
+* Run #8: live verification of 50 official sites + three verifier fixes —
+  `91be7f1`, merged as `b4d43fb`
+* Run #9 Unit 9.1: robots.txt regression fixed — `src/core/robots.py` replaces
+  `urllib.robotparser` (this commit)
 
 ---
 
@@ -405,7 +488,15 @@ cleanly. No network access, no live directory calls.
   Expect JS-rendered landing pages and CDN challenges to appear at larger
   limits; per the rule above, those are not by themselves proof that the
   verifier is wrong.
-* The robots.txt fix means the crawler now reaches sites it previously skipped,
+* Robots compliance is now enforced by our own matcher (`src/core/robots.py`)
+  rather than `urllib.robotparser`, because the stdlib parser's answers differ
+  between Python versions and it under-enforced real `Disallow` rules on
+  ≤ 3.12 (Run #9). The matcher implements the common RFC 9309 subset —
+  groups, longest-match precedence, `*` and `$`. It does **not** implement
+  `crawl-delay` or `request-rate` (politeness comes from the per-host rate
+  limiter instead), and sitemap directives are ignored.
+* The Run #7 robots transport fix means the crawler now reaches sites it
+  previously skipped,
   so **live pass A's 6 `fetch_failed` results should not be cited as evidence
   about those products** — they were an artefact of our own client.
 * The `Tool`-level `ToolsPipeline.verify` stage still skips while

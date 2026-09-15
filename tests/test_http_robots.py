@@ -16,6 +16,14 @@ at all, and the verifier recorded a *network failure that never happened*.
 The verifier's decision rules are deliberately **not** involved: the fix is in
 the transport layer, and these tests pin the transport behaviour. Everything
 here is offline — a fake session, no sockets.
+
+Run #9 found a second, opposite defect in the same code path: the stdlib
+parser was *under*-enforcing. For this very fixture it dropped every rule
+following a blank line (Python <= 3.12) and applied first-match rather than
+RFC 9309 longest-match precedence, so real ``Disallow`` rules silently became
+"crawlable" — and the answers changed between interpreter versions. Robots
+matching therefore moved to :mod:`src.core.robots`; the rule-semantics tests
+live in ``test_robots_rules.py`` and the end-to-end enforcement tests here.
 """
 
 from __future__ import annotations
@@ -157,6 +165,41 @@ def test_real_disallow_rule_is_still_enforced() -> None:
     assert session.page_requests == [], "a disallowed URL must never be requested"
 
 
+@pytest.mark.parametrize(
+    "path",
+    ["/api/private", "/_nuxt/entry.js", "/__sitemap__/index.xml", "/cdn-cgi/trace"],
+)
+def test_every_disallowed_prefix_in_the_fixture_is_enforced(path: str) -> None:
+    """All four ``Disallow`` rules must bind, not just the first one.
+
+    In the fixture a blank line separates ``Allow: /`` from the ``Disallow``
+    block. ``urllib.robotparser`` on Python <= 3.12 treated that blank line as
+    a group terminator and discarded all four rules, so the client happily
+    requested private paths. Run #9 replaced the parser; this asserts the
+    whole block is honoured end-to-end through the transport.
+    """
+    session = FakeSession(robots=FakeResponse(200, ROBOTS_ALLOW_ROOT))
+    client = _client(session)
+
+    with pytest.raises(FetchError, match="robots.txt"):
+        client.fetch(f"https://ezaudio.io{path}")
+
+    assert session.page_requests == []
+
+
+def test_public_paths_stay_fetchable_under_the_fixture_rules() -> None:
+    """Enforcing the private prefixes must not over-block the public site."""
+    session = FakeSession(robots=FakeResponse(200, ROBOTS_ALLOW_ROOT))
+    client = _client(session)
+
+    assert client.fetch("https://ezaudio.io/pricing").status == 200
+    assert client.fetch("https://ezaudio.io/apixyz").status == 200
+    assert session.page_requests == [
+        "https://ezaudio.io/pricing",
+        "https://ezaudio.io/apixyz",
+    ]
+
+
 def test_global_disallow_all_is_respected() -> None:
     """An explicit site-wide ``Disallow: /`` still blocks every request."""
     session = FakeSession(robots=FakeResponse(200, "User-agent: *\nDisallow: /\n"))
@@ -211,6 +254,20 @@ def test_network_error_on_robots_allows_the_fetch() -> None:
 def test_empty_robots_allows_the_fetch() -> None:
     """An empty robots.txt expresses no rules, so nothing is disallowed."""
     session = FakeSession(robots=FakeResponse(200, ""))
+    client = _client(session)
+
+    assert client.fetch("https://ezaudio.io/").status == 200
+    assert session.page_requests == ["https://ezaudio.io/"]
+
+
+def test_unparseable_robots_allows_the_fetch() -> None:
+    """A body that yields no usable rules is not a prohibition either.
+
+    Some origins answer /robots.txt with an HTML error page or a login wall.
+    That expresses no rules, so Run #7's intent holds: only explicitly
+    published rules may block a request.
+    """
+    session = FakeSession(robots=FakeResponse(200, "<html><body>Login required</body></html>"))
     client = _client(session)
 
     assert client.fetch("https://ezaudio.io/").status == 200
