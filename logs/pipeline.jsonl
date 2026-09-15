@@ -1,0 +1,10 @@
+{"ts": "2026-09-15T17:57:05.901211+00:00", "level": "INFO", "logger": "aiorbit.discovery.registry", "message": "loaded source registry", "path": "/home/user/webapp/config/sources.yaml", "count": 21}
+{"ts": "2026-09-15T17:57:35.108495+00:00", "level": "INFO", "logger": "aiorbit.discovery.registry", "message": "loaded source registry", "path": "/home/user/webapp/config/sources.yaml", "count": 21}
+{"ts": "2026-09-15T17:58:07.728914+00:00", "level": "INFO", "logger": "aiorbit.discovery.registry", "message": "loaded source registry", "path": "/home/user/webapp/config/sources.yaml", "count": 21}
+{"ts": "2026-09-15T17:58:13.951716+00:00", "level": "INFO", "logger": "aiorbit.discovery.registry", "message": "loaded source registry", "path": "/home/user/webapp/config/sources.yaml", "count": 21}
+{"ts": "2026-09-15T17:58:13.952068+00:00", "level": "INFO", "logger": "aiorbit.pipeline", "message": "pipeline run starting", "dry_run": true, "batch": 1, "target": 1000}
+{"ts": "2026-09-15T17:58:13.952480+00:00", "level": "WARNING", "logger": "aiorbit.pipeline", "message": "no discovery adapters are enabled/implemented; configured sources: 21"}
+{"ts": "2026-09-15T17:58:13.952669+00:00", "level": "INFO", "logger": "aiorbit.validation", "message": "validation complete", "total": 0, "publishable": 0, "blocked": 0, "issues_by_rule": {}}
+{"ts": "2026-09-15T17:58:13.952795+00:00", "level": "INFO", "logger": "aiorbit.scoring", "message": "batch selection complete", "selected": 0, "not_selected": 0, "target": 1000, "min_score": 70}
+{"ts": "2026-09-15T17:58:13.952909+00:00", "level": "INFO", "logger": "aiorbit.enrichment.relationships", "message": "relationship extraction complete", "edges": 0}
+{"ts": "2026-09-15T17:58:13.959308+00:00", "level": "INFO", "logger": "aiorbit.pipeline", "message": "pipeline run complete", "stage": "relationships", "input": 0, "output": 0, "dropped": 0, "errors": 0, "started_at": "2026-09-15T17:58:13.952896+00:00", "finished_at": "2026-09-15T17:58:13.952979+00:00", "details": {"by_type": {}}}
