@@ -1,20 +1,20 @@
 {
   "input_path": "/home/user/webapp/data/raw/candidates.jsonl",
   "output_path": "/home/user/webapp/data/interim/candidates_resolved.jsonl",
-  "generated_at": "2026-09-16T22:17:41.935439+00:00",
+  "generated_at": "2026-09-16T22:22:48.824127+00:00",
   "live": true,
   "complete": false,
   "scope_sources": null,
-  "input_records": 3074,
+  "input_records": 3164,
   "input_unreadable_lines": 0,
-  "output_records": 3063,
+  "output_records": 3153,
   "pending": null,
   "pending_scope": "whole feed",
   "pending_known": false,
   "already_had_official_url": 2192,
-  "needed_resolution": 871,
-  "attempted": 871,
-  "resolved": 862,
+  "needed_resolution": 961,
+  "attempted": 961,
+  "resolved": 952,
   "unresolved": 9,
   "skipped_no_detail_url": 0,
   "fetch_failures": 0,
@@ -24,14 +24,14 @@
   "identity_mismatches": 0,
   "no_outbound_url": 8,
   "needs_review": 0,
-  "resolution_rate_of_attempted": 0.9897,
-  "resolution_rate_of_missing_official_url": 0.9897,
+  "resolution_rate_of_attempted": 0.9906,
+  "resolution_rate_of_missing_official_url": 0.9906,
   "failures": {
     "http_error": 1,
     "only_shared_hosts": 8
   },
   "evidence_types": {
-    "json_ld_software_url": 826,
+    "json_ld_software_url": 916,
     "outbound_visit_link": 36
   },
   "by_source": {
@@ -55,10 +55,10 @@
     },
     "dang": {
       "already_had_official_url": 0,
-      "attempted": 830,
-      "needed_resolution": 830,
-      "records": 830,
-      "resolved": 826,
+      "attempted": 920,
+      "needed_resolution": 920,
+      "records": 920,
+      "resolved": 916,
       "skipped_no_detail_url": 0,
       "unresolved": 4
     }
