@@ -1,36 +1,37 @@
 {
   "input_path": "/home/user/webapp/data/raw/candidates.jsonl",
   "output_path": "/home/user/webapp/data/interim/candidates_resolved.jsonl",
-  "generated_at": "2026-09-16T21:12:54.578089+00:00",
+  "generated_at": "2026-09-16T21:27:39.308235+00:00",
   "live": true,
-  "complete": true,
+  "complete": false,
   "scope_sources": null,
-  "input_records": 3957,
+  "input_records": 2547,
   "input_unreadable_lines": 0,
-  "output_records": 2286,
-  "pending": 1660,
+  "output_records": 2536,
+  "pending": null,
   "pending_scope": "whole feed",
-  "pending_known": true,
+  "pending_known": false,
   "already_had_official_url": 2192,
-  "needed_resolution": 94,
-  "attempted": 94,
-  "resolved": 88,
-  "unresolved": 6,
+  "needed_resolution": 344,
+  "attempted": 344,
+  "resolved": 335,
+  "unresolved": 9,
   "skipped_no_detail_url": 0,
   "fetch_failures": 0,
-  "http_errors": 0,
+  "http_errors": 1,
   "bot_challenges": 0,
   "parse_failures": 0,
   "identity_mismatches": 0,
-  "no_outbound_url": 6,
+  "no_outbound_url": 8,
   "needs_review": 0,
-  "resolution_rate_of_attempted": 0.9362,
-  "resolution_rate_of_missing_official_url": 0.9362,
+  "resolution_rate_of_attempted": 0.9738,
+  "resolution_rate_of_missing_official_url": 0.9738,
   "failures": {
-    "only_shared_hosts": 6
+    "http_error": 1,
+    "only_shared_hosts": 8
   },
   "evidence_types": {
-    "json_ld_software_url": 52,
+    "json_ld_software_url": 299,
     "outbound_visit_link": 36
   },
   "by_source": {
@@ -54,12 +55,12 @@
     },
     "dang": {
       "already_had_official_url": 0,
-      "attempted": 53,
-      "needed_resolution": 53,
-      "records": 53,
-      "resolved": 52,
+      "attempted": 303,
+      "needed_resolution": 303,
+      "records": 303,
+      "resolved": 299,
       "skipped_no_detail_url": 0,
-      "unresolved": 1
+      "unresolved": 4
     }
   },
   "note": "official URL resolution is not official-site verification: this URL is a claim published by a directory and still has to be verified against the product's own website"
