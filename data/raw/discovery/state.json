@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated_at": "2026-09-16T18:29:37.972071+00:00",
+  "updated_at": "2026-09-16T19:00:24.833492+00:00",
   "sources": {
     "creati": {
       "completed_plans": [],
@@ -9,6 +9,14 @@
       "last_checkpoint_at": "2026-09-16T18:29:36.732340+00:00",
       "last_batch_at": "2026-09-16T18:29:37.263369+00:00",
       "last_batch_emitted": 2193
+    },
+    "dang": {
+      "completed_plans": [],
+      "stored_candidates": 1713,
+      "batches": 2,
+      "last_checkpoint_at": "2026-09-16T19:00:23.285123+00:00",
+      "last_batch_at": "2026-09-16T19:00:23.664321+00:00",
+      "last_batch_emitted": 1713
     }
   },
   "batches": [
@@ -20,6 +28,24 @@
       ],
       "emitted": 2193,
       "pool_size": 2244
+    },
+    {
+      "started_at": "2026-09-16T18:55:30.111127+00:00",
+      "finished_at": "2026-09-16T18:55:37.447995+00:00",
+      "sources": [
+        "dang"
+      ],
+      "emitted": 76,
+      "pool_size": 2320
+    },
+    {
+      "started_at": "2026-09-16T18:55:56.044661+00:00",
+      "finished_at": "2026-09-16T19:00:23.330632+00:00",
+      "sources": [
+        "dang"
+      ],
+      "emitted": 1713,
+      "pool_size": 3957
     }
   ]
 }
