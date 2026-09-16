@@ -206,11 +206,19 @@ def cmd_discover(args: argparse.Namespace) -> int:
     Raw candidates land in ``data/raw/discovery/<source>.jsonl`` with full
     provenance; the merged, exact-duplicate-free feed lands in
     ``data/raw/candidates.jsonl`` for the normalization pipeline.
+
+    Batches accumulate by default: a run adds to what is already stored and
+    checkpoints to disk as it goes, so production discovery can be executed in
+    small resumable slices. Pass ``--replace`` for a clean re-crawl.
     """
     settings = get_settings(reload=True)
     settings.paths.ensure()
 
-    runner = DiscoveryRunner(settings)
+    runner = DiscoveryRunner(
+        settings,
+        accumulate=not args.replace,
+        checkpoint_every=args.checkpoint_every,
+    )
     kwargs: dict[str, object] = {}
     if args.max_pages is not None:
         kwargs["max_pages"] = args.max_pages
@@ -471,6 +479,20 @@ def build_parser() -> argparse.ArgumentParser:
     discover_parser.add_argument("--no-cache", action="store_true", help="bypass the HTTP cache")
     discover_parser.add_argument(
         "--no-persist", action="store_true", help="do not write artefacts"
+    )
+    discover_parser.add_argument(
+        "--replace",
+        action="store_true",
+        help=(
+            "overwrite the stored artefact for each source instead of "
+            "accumulating into it (default is accumulate + resume)"
+        ),
+    )
+    discover_parser.add_argument(
+        "--checkpoint-every",
+        type=int,
+        default=25,
+        help="flush the source artefact to disk every N new candidates (0=off)",
     )
     discover_parser.set_defaults(func=cmd_discover)
 

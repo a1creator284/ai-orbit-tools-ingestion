@@ -194,6 +194,117 @@ class TestRunner:
         assert report.total_emitted == 2
 
 
+class TestAccumulationAndCheckpointing:
+    """Production discovery runs in resumable batches (see runner docstring)."""
+
+    def accumulating_runner(self, tmp_path: Path, sources, **kwargs) -> DiscoveryRunner:
+        settings = Settings()
+        settings.paths.root = str(tmp_path)
+        settings.paths.ensure()
+        return DiscoveryRunner(
+            settings, registry=FakeRegistry(sources), accumulate=True, **kwargs
+        )
+
+    def test_second_batch_does_not_delete_first_sources_candidates(
+        self, tmp_path, creati_config, taaft_config
+    ) -> None:
+        raw = tmp_path / "data" / "raw"
+        self.accumulating_runner(
+            tmp_path,
+            [creati_source(creati_config, {CREATI_URL: load_fixture("creati_listing_page1.html")})],
+        ).run(source_keys=["creati"], include_categories=False, max_pages=1)
+        creati_rows = (raw / "discovery" / "creati.jsonl").read_text().strip().splitlines()
+        assert creati_rows
+
+        # A later batch runs a *different* source only.
+        _merged, report = self.accumulating_runner(
+            tmp_path,
+            [taaft_source(taaft_config, {TAAFT_URL: load_fixture("taaft_listing_page1.html")})],
+        ).run(source_keys=["taaft"], max_pages=1)
+
+        still_there = (raw / "discovery" / "creati.jsonl").read_text().strip().splitlines()
+        assert still_there == creati_rows, "a later batch must not wipe a stored source"
+        merged_rows = (raw / "candidates.jsonl").read_text().strip().splitlines()
+        sources_in_feed = {json.loads(line)["source_key"] for line in merged_rows}
+        assert sources_in_feed == {"creati", "taaft"}
+        assert report.total_pool == len(merged_rows)
+
+    def test_rerunning_the_same_source_does_not_duplicate_stored_rows(
+        self, tmp_path, creati_config
+    ) -> None:
+        html = load_fixture("creati_listing_page1.html")
+        for _ in range(2):
+            self.accumulating_runner(
+                tmp_path, [creati_source(creati_config, {CREATI_URL: html})]
+            ).run(source_keys=["creati"], include_categories=False, max_pages=1)
+        rows = (tmp_path / "data" / "raw" / "discovery" / "creati.jsonl").read_text().strip().splitlines()
+        keys = [candidate_identity_from_row(json.loads(line)) for line in rows]
+        assert len(keys) == len(set(keys)), "re-running a source must be idempotent"
+
+    def test_interrupted_batch_keeps_checkpointed_candidates(
+        self, tmp_path, creati_config
+    ) -> None:
+        class Exploding(CreatiSource):
+            def discover(self, **kwargs):  # noqa: D102
+                yield candidate("Kept One", website="https://kept-one.example/", source="creati")
+                yield candidate("Kept Two", website="https://kept-two.example/", source="creati")
+                raise RuntimeError("upstream died mid-walk")
+
+        runner = self.accumulating_runner(
+            tmp_path, [Exploding(creati_config, FakeHttpClient())], checkpoint_every=1
+        )
+        runner.run(source_keys=["creati"])
+        rows = (tmp_path / "data" / "raw" / "discovery" / "creati.jsonl").read_text().strip().splitlines()
+        assert len(rows) == 2, "work collected before the failure must survive"
+
+    def test_state_file_records_resumable_progress(self, tmp_path, creati_config) -> None:
+        self.accumulating_runner(
+            tmp_path,
+            [creati_source(creati_config, {CREATI_URL: load_fixture("creati_listing_page1.html")})],
+        ).run(source_keys=["creati"], include_categories=False, max_pages=1)
+        state = json.loads(
+            (tmp_path / "data" / "raw" / "discovery" / "state.json").read_text(encoding="utf-8")
+        )
+        assert state["sources"]["creati"]["stored_candidates"] > 0
+        assert state["sources"]["creati"]["batches"] == 1
+        assert state["batches"], "each batch is logged for auditability"
+
+    def test_replace_mode_still_overwrites(self, tmp_path, creati_config, taaft_config) -> None:
+        """The original single-shot behaviour is preserved behind accumulate=False."""
+        settings = Settings()
+        settings.paths.root = str(tmp_path)
+        settings.paths.ensure()
+        DiscoveryRunner(
+            settings,
+            registry=FakeRegistry(
+                [creati_source(creati_config, {CREATI_URL: load_fixture("creati_listing_page1.html")})]
+            ),
+        ).run(include_categories=False, max_pages=1)
+        before = (tmp_path / "data" / "raw" / "candidates.jsonl").read_text().strip().splitlines()
+        assert before
+
+        DiscoveryRunner(
+            settings,
+            registry=FakeRegistry(
+                [taaft_source(taaft_config, {TAAFT_URL: load_fixture("taaft_listing_page1.html")})]
+            ),
+        ).run(max_pages=1)
+        after = (tmp_path / "data" / "raw" / "candidates.jsonl").read_text().strip().splitlines()
+        assert {json.loads(line)["source_key"] for line in after} == {"taaft"}
+
+
+def candidate_identity_from_row(row: dict) -> str:
+    return candidate_identity(
+        CandidateTool(
+            name=row["name"],
+            source_key=row["source_key"],
+            source_name=row["source_name"],
+            website=row.get("website"),
+            listing_url=row.get("listing_url"),
+        )
+    )
+
+
 class TestRegistryWiring:
     def test_both_tier1_adapters_are_registered(self) -> None:
         adapters = load_adapters()

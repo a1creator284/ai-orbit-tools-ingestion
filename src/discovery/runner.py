@@ -6,8 +6,21 @@ Separation of concerns required by the ingestion spec:
   exactly as observed, with full provenance. Never edited by later stages.
 * ``data/raw/discovery/report.json`` — per-source audit trail (pages fetched,
   cards seen, duplicates, stop reasons, errors).
+* ``data/raw/discovery/state.json`` — cumulative, resumable run state: which
+  listing plans a source has already completed, and how many candidates are
+  stored for it. A later batch reads this and skips finished work.
 * ``data/raw/candidates.jsonl`` — the merged, cross-source de-duplicated feed
   consumed by the normalization/deduplication pipeline.
+
+Production discovery is **batched and resumable**, not one long run:
+
+* a source's artefact is checkpointed to disk *while* it is being walked
+  (``checkpoint_every``), so an interrupted batch never loses collected work;
+* a new batch *accumulates* into the stored artefact instead of replacing it
+  (``accumulate``), so running one source today never deletes the candidates
+  another source contributed yesterday;
+* the merged feed is rebuilt from everything on disk, so it always reflects
+  the full accumulated pool rather than only the most recent batch.
 
 Cross-source de-duplication here is intentionally conservative: it only
 collapses *exact* identity matches (same official domain, or same listing URL)
@@ -20,6 +33,7 @@ zero candidates and an explicit reason.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -35,6 +49,12 @@ from src.discovery.registry import SourceRegistry
 logger = get_logger("discovery.runner")
 
 RAW_SUBDIR = "discovery"
+STATE_FILENAME = "state.json"
+REPORT_FILENAME = "report.json"
+MERGED_FILENAME = "candidates.jsonl"
+
+#: Default number of new candidates between on-disk checkpoints.
+DEFAULT_CHECKPOINT_EVERY = 25
 
 
 @dataclass
@@ -47,11 +67,14 @@ class DiscoveryRunReport:
     total_emitted: int = 0
     total_unique: int = 0
     cross_source_duplicates: int = 0
+    #: Size of the whole accumulated pool on disk (accumulate mode only).
+    total_pool: int | None = None
+    pool_cross_source_duplicates: int | None = None
     artefacts: dict[str, str] = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload: dict[str, Any] = {
             "started_at": self.started_at,
             "finished_at": self.finished_at,
             "total_emitted": self.total_emitted,
@@ -61,6 +84,11 @@ class DiscoveryRunReport:
             "artefacts": self.artefacts,
             "notes": self.notes,
         }
+        if self.total_pool is not None:
+            payload["total_pool"] = self.total_pool
+        if self.pool_cross_source_duplicates is not None:
+            payload["pool_cross_source_duplicates"] = self.pool_cross_source_duplicates
+        return payload
 
 
 def candidate_identity(candidate: CandidateTool) -> str:
@@ -130,18 +158,108 @@ def _record_contribution(target: CandidateTool, contributor: CandidateTool) -> N
         entries.append(entry)
 
 
+def load_stored_candidates(path: Path) -> list[CandidateTool]:
+    """Rehydrate an existing per-source artefact so a batch can extend it.
+
+    Imported lazily: :mod:`src.candidates.store` imports this module for
+    ``RAW_SUBDIR``, so a module-level import would be circular.
+    """
+    from src.candidates.store import load_candidate_file
+
+    if not path.exists():
+        return []
+    return load_candidate_file(path, default_source_key=path.stem)
+
+
+@dataclass
+class DiscoveryState:
+    """Cumulative, resumable state across discovery batches."""
+
+    version: int = 1
+    updated_at: str | None = None
+    #: ``source_key -> {"completed_plans": [...], "stored_candidates": int, ...}``
+    sources: dict[str, dict[str, Any]] = field(default_factory=dict)
+    batches: list[dict[str, Any]] = field(default_factory=list)
+
+    @classmethod
+    def load(cls, path: Path) -> "DiscoveryState":
+        if not path.exists():
+            return cls()
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            logger.warning("discovery state unreadable; starting fresh", extra={"path": str(path)})
+            return cls()
+        if not isinstance(payload, dict):
+            return cls()
+        state = cls(
+            version=int(payload.get("version", 1)),
+            updated_at=payload.get("updated_at"),
+            sources=dict(payload.get("sources") or {}),
+            batches=list(payload.get("batches") or []),
+        )
+        return state
+
+    def source(self, key: str) -> dict[str, Any]:
+        entry = self.sources.setdefault(
+            key, {"completed_plans": [], "stored_candidates": 0, "batches": 0}
+        )
+        entry.setdefault("completed_plans", [])
+        entry.setdefault("stored_candidates", 0)
+        entry.setdefault("batches", 0)
+        return entry
+
+    def completed_plans(self, key: str) -> set[str]:
+        return {str(label) for label in self.source(key).get("completed_plans", [])}
+
+    def note_completed_plans(self, key: str, labels: Iterable[str]) -> None:
+        entry = self.source(key)
+        known = list(entry["completed_plans"])
+        for label in labels:
+            if label not in known:
+                known.append(label)
+        entry["completed_plans"] = known
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "version": self.version,
+            "updated_at": self.updated_at,
+            "sources": self.sources,
+            # Keep the batch log bounded; it is an audit trail, not a dataset.
+            "batches": self.batches[-50:],
+        }
+
+
 class DiscoveryRunner:
-    """Runs discovery across sources and persists raw + merged artefacts."""
+    """Runs discovery across sources and persists raw + merged artefacts.
+
+    Parameters
+    ----------
+    accumulate:
+        When ``True`` (production default) a batch is *added* to whatever is
+        already stored for that source instead of replacing it, and the merged
+        feed is rebuilt from every stored source. When ``False`` the run
+        writes only what it just collected (the original single-shot
+        behaviour, kept for tests and one-off re-crawls).
+    checkpoint_every:
+        Flush the in-progress source artefact to disk after this many new
+        candidates. ``0`` disables intra-source checkpointing.
+    """
 
     def __init__(
         self,
         settings: Settings | None = None,
         *,
         registry: SourceRegistry | None = None,
+        accumulate: bool = False,
+        checkpoint_every: int = DEFAULT_CHECKPOINT_EVERY,
     ) -> None:
         self.settings = settings or get_settings()
         self.registry = registry if registry is not None else SourceRegistry()
         self.report = DiscoveryRunReport(started_at=_now())
+        self.accumulate = accumulate
+        self.checkpoint_every = max(0, int(checkpoint_every))
+        self.state = DiscoveryState()
 
     # ------------------------------------------------------------------- run
     def run(
@@ -152,12 +270,23 @@ class DiscoveryRunner:
         persist: bool = True,
         **discover_kwargs: Any,
     ) -> tuple[list[CandidateTool], DiscoveryRunReport]:
-        """Discover candidates from the requested (or all active) sources."""
+        """Discover candidates from the requested (or all active) sources.
+
+        In accumulate mode the per-source artefact is checkpointed to disk
+        while the source is still being walked, so a batch that is interrupted
+        (rate limit, timeout, credit budget) keeps everything collected up to
+        that point.
+        """
         sources = self._resolve_sources(source_keys)
         if not sources:
             note = "no discovery adapters are enabled/implemented"
             self.report.notes.append(note)
             logger.warning(note)
+
+        discovery_dir = self.settings.paths.resolve("raw") / RAW_SUBDIR
+        if self.accumulate:
+            discovery_dir.mkdir(parents=True, exist_ok=True)
+            self.state = DiscoveryState.load(discovery_dir / STATE_FILENAME)
 
         raw_per_source: dict[str, list[CandidateTool]] = {}
         all_candidates: list[CandidateTool] = []
@@ -165,14 +294,32 @@ class DiscoveryRunner:
         for source in sources:
             produced: list[CandidateTool] = []
             error: str | None = None
+            checkpoints = 0
             try:
                 for candidate in source.discover(limit=limit_per_source, **discover_kwargs):
                     produced.append(candidate)
+                    if (
+                        persist
+                        and self.accumulate
+                        and self.checkpoint_every
+                        and len(produced) % self.checkpoint_every == 0
+                    ):
+                        self._checkpoint_source(discovery_dir, source.key, produced)
+                        checkpoints += 1
             except Exception as exc:  # noqa: BLE001 - one dead source must not stop the run
                 error = str(exc)
                 logger.warning(
                     "discovery source failed", extra={"source": source.key, "error": error}
                 )
+            except BaseException:
+                # Ctrl-C / budget kill: never discard what was already collected.
+                if persist and self.accumulate and produced:
+                    self._checkpoint_source(discovery_dir, source.key, produced)
+                raise
+
+            if persist and self.accumulate and produced:
+                self._checkpoint_source(discovery_dir, source.key, produced)
+                checkpoints += 1
 
             stats = (
                 source.stats_dict()
@@ -182,6 +329,8 @@ class DiscoveryRunner:
             if error:
                 stats.setdefault("errors", []).append(error)
             stats["emitted"] = len(produced)
+            if checkpoints:
+                stats["checkpoints_written"] = checkpoints
             if not produced:
                 stats["outcome"] = "no_candidates"
                 reasons = stats.get("stop_reasons") or {}
@@ -219,6 +368,35 @@ class DiscoveryRunner:
                 logger.warning("source unavailable", extra={"source": key, "error": str(exc)})
         return sources
 
+    # ------------------------------------------------------- checkpointing
+    def _checkpoint_source(
+        self, discovery_dir: Path, key: str, produced: Sequence[CandidateTool]
+    ) -> Path:
+        """Write the source's artefact mid-walk (stored ∪ just-collected).
+
+        Rewriting the whole file (atomically, via :func:`write_jsonl`) rather
+        than appending keeps the artefact valid at every instant and keeps the
+        exact-duplicate guarantee: a resumed batch that re-sees a candidate
+        does not duplicate the stored row.
+        """
+        path = discovery_dir / f"{key}.jsonl"
+        stored = load_stored_candidates(path)
+        combined, _dupes = merge_candidates([*stored, *produced])
+        write_jsonl(path, [c.to_dict() for c in combined])
+        entry = self.state.source(key)
+        entry["stored_candidates"] = len(combined)
+        entry["last_checkpoint_at"] = _now()
+        self._write_state(discovery_dir)
+        logger.info(
+            "discovery checkpoint written",
+            extra={"source": key, "new": len(produced), "stored": len(combined)},
+        )
+        return path
+
+    def _write_state(self, discovery_dir: Path) -> Path:
+        self.state.updated_at = _now()
+        return write_json(discovery_dir / STATE_FILENAME, self.state.to_dict())
+
     def _persist(
         self,
         raw_per_source: dict[str, list[CandidateTool]],
@@ -230,17 +408,57 @@ class DiscoveryRunner:
 
         artefacts: dict[str, Path] = {}
         for key, candidates in raw_per_source.items():
+            path = discovery_dir / f"{key}.jsonl"
+            if self.accumulate:
+                stored = load_stored_candidates(path)
+                combined, _dupes = merge_candidates([*stored, *candidates])
+                entry = self.state.source(key)
+                entry["stored_candidates"] = len(combined)
+                entry["batches"] = int(entry.get("batches", 0)) + 1
+                entry["last_batch_at"] = _now()
+                entry["last_batch_emitted"] = len(candidates)
+            else:
+                combined = list(candidates)
             artefacts[f"raw_{key}"] = write_jsonl(
-                discovery_dir / f"{key}.jsonl", [c.to_dict() for c in candidates]
+                path, [c.to_dict() for c in combined]
             )
+
+        if self.accumulate:
+            # The merged feed must describe the whole accumulated pool, not
+            # just this batch: running one source must never silently delete
+            # another source's candidates from the pipeline's input.
+            merged = self._merge_all_stored(discovery_dir)
+
         artefacts["merged_candidates"] = write_jsonl(
-            raw_root / "candidates.jsonl", [c.to_dict() for c in merged]
+            raw_root / MERGED_FILENAME, [c.to_dict() for c in merged]
         )
         artefacts["discovery_report"] = write_json(
-            discovery_dir / "report.json", self.report.to_dict()
+            discovery_dir / REPORT_FILENAME, self.report.to_dict()
         )
+        if self.accumulate:
+            self.state.batches.append(
+                {
+                    "started_at": self.report.started_at,
+                    "finished_at": self.report.finished_at,
+                    "sources": sorted(raw_per_source),
+                    "emitted": self.report.total_emitted,
+                    "pool_size": len(merged),
+                }
+            )
+            artefacts["discovery_state"] = self._write_state(discovery_dir)
+            self.report.total_pool = len(merged)
+
         self.report.artefacts = {name: str(path) for name, path in artefacts.items()}
-        write_json(discovery_dir / "report.json", self.report.to_dict())
+        write_json(discovery_dir / REPORT_FILENAME, self.report.to_dict())
+
+    def _merge_all_stored(self, discovery_dir: Path) -> list[CandidateTool]:
+        """Rebuild the merged feed from every stored per-source artefact."""
+        everything: list[CandidateTool] = []
+        for path in sorted(discovery_dir.glob("*.jsonl")):
+            everything.extend(load_stored_candidates(path))
+        merged, duplicates = merge_candidates(everything)
+        self.report.pool_cross_source_duplicates = duplicates
+        return merged
 
 
 def _now() -> str:
