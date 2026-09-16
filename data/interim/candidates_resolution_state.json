@@ -1,9 +1,9 @@
 {
   "version": 1,
-  "updated_at": "2026-09-16T20:41:23.050980+00:00",
+  "updated_at": "2026-09-16T21:12:54.579133+00:00",
   "input_path": "/home/user/webapp/data/raw/candidates.jsonl",
   "output_path": "/home/user/webapp/data/interim/candidates_resolved.jsonl",
-  "records_persisted": 2276,
+  "records_persisted": 2286,
   "batches": [
     {
       "started_at": "2026-09-16T20:20:16.420788+00:00",
@@ -40,16 +40,25 @@
       "records_written": 10,
       "detail_pages_fetched": 10,
       "finished": true
+    },
+    {
+      "started_at": "2026-09-16T21:12:23.467651+00:00",
+      "updated_at": "2026-09-16T21:12:54.579120+00:00",
+      "live": true,
+      "resumed_from_records": 2276,
+      "records_written": 10,
+      "detail_pages_fetched": 10,
+      "finished": true
     }
   ],
   "last_report": {
     "input_records": 3957,
-    "output_records": 2276,
-    "pending": 1670,
+    "output_records": 2286,
+    "pending": 1660,
     "already_had_official_url": 2192,
-    "needed_resolution": 84,
-    "attempted": 84,
-    "resolved": 79,
-    "unresolved": 5
+    "needed_resolution": 94,
+    "attempted": 94,
+    "resolved": 88,
+    "unresolved": 6
   }
 }

@@ -1,35 +1,36 @@
 {
   "input_path": "/home/user/webapp/data/raw/candidates.jsonl",
   "output_path": "/home/user/webapp/data/interim/candidates_resolved.jsonl",
-  "generated_at": "2026-09-16T20:41:23.049682+00:00",
+  "generated_at": "2026-09-16T21:12:54.578089+00:00",
   "live": true,
   "complete": true,
   "scope_sources": null,
   "input_records": 3957,
   "input_unreadable_lines": 0,
-  "output_records": 2276,
-  "pending": 1670,
+  "output_records": 2286,
+  "pending": 1660,
   "pending_scope": "whole feed",
+  "pending_known": true,
   "already_had_official_url": 2192,
-  "needed_resolution": 84,
-  "attempted": 84,
-  "resolved": 79,
-  "unresolved": 5,
+  "needed_resolution": 94,
+  "attempted": 94,
+  "resolved": 88,
+  "unresolved": 6,
   "skipped_no_detail_url": 0,
   "fetch_failures": 0,
   "http_errors": 0,
   "bot_challenges": 0,
   "parse_failures": 0,
   "identity_mismatches": 0,
-  "no_outbound_url": 5,
+  "no_outbound_url": 6,
   "needs_review": 0,
-  "resolution_rate_of_attempted": 0.9405,
-  "resolution_rate_of_missing_official_url": 0.9405,
+  "resolution_rate_of_attempted": 0.9362,
+  "resolution_rate_of_missing_official_url": 0.9362,
   "failures": {
-    "only_shared_hosts": 5
+    "only_shared_hosts": 6
   },
   "evidence_types": {
-    "json_ld_software_url": 43,
+    "json_ld_software_url": 52,
     "outbound_visit_link": 36
   },
   "by_source": {
@@ -53,12 +54,12 @@
     },
     "dang": {
       "already_had_official_url": 0,
-      "attempted": 43,
-      "needed_resolution": 43,
-      "records": 43,
-      "resolved": 43,
+      "attempted": 53,
+      "needed_resolution": 53,
+      "records": 53,
+      "resolved": 52,
       "skipped_no_detail_url": 0,
-      "unresolved": 0
+      "unresolved": 1
     }
   },
   "note": "official URL resolution is not official-site verification: this URL is a claim published by a directory and still has to be verified against the product's own website"
