@@ -1,13 +1,25 @@
 {
   "version": 1,
-  "updated_at": "2026-09-16T18:25:14.260845+00:00",
+  "updated_at": "2026-09-16T18:29:37.972071+00:00",
   "sources": {
     "creati": {
       "completed_plans": [],
-      "stored_candidates": 1354,
-      "batches": 0,
-      "last_checkpoint_at": "2026-09-16T18:25:14.260806+00:00"
+      "stored_candidates": 2197,
+      "batches": 1,
+      "last_checkpoint_at": "2026-09-16T18:29:36.732340+00:00",
+      "last_batch_at": "2026-09-16T18:29:37.263369+00:00",
+      "last_batch_emitted": 2193
     }
   },
-  "batches": []
+  "batches": [
+    {
+      "started_at": "2026-09-16T18:22:29.457854+00:00",
+      "finished_at": "2026-09-16T18:29:36.837624+00:00",
+      "sources": [
+        "creati"
+      ],
+      "emitted": 2193,
+      "pool_size": 2244
+    }
+  ]
 }

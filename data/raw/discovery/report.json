@@ -1,26 +1,26 @@
 {
-  "started_at": "2026-09-16T18:20:13.820261+00:00",
-  "finished_at": "2026-09-16T18:22:31.284655+00:00",
-  "total_emitted": 856,
-  "total_unique": 856,
+  "started_at": "2026-09-16T18:22:29.457854+00:00",
+  "finished_at": "2026-09-16T18:29:36.837624+00:00",
+  "total_emitted": 2193,
+  "total_unique": 2193,
   "cross_source_duplicates": 0,
   "sources": {
     "creati": {
       "source": "creati",
-      "plans_attempted": 41,
+      "plans_attempted": 161,
       "plans_blocked": 0,
-      "pages_fetched": 41,
+      "pages_fetched": 161,
       "pages_failed": 0,
-      "cards_seen": 1244,
+      "cards_seen": 3553,
       "cards_unparsed": 0,
-      "candidates_emitted": 856,
-      "duplicates_skipped": 388,
+      "candidates_emitted": 2193,
+      "duplicates_skipped": 1360,
       "stop_reasons": {
-        "max_pages_reached": 41
+        "max_pages_reached": 161
       },
       "errors": [],
-      "emitted": 856,
-      "checkpoints_written": 35
+      "emitted": 2193,
+      "checkpoints_written": 88
     }
   },
   "artefacts": {
@@ -30,6 +30,6 @@
     "discovery_state": "/home/user/webapp/data/raw/discovery/state.json"
   },
   "notes": [],
-  "total_pool": 907,
+  "total_pool": 2244,
   "pool_cross_source_duplicates": 1
 }
