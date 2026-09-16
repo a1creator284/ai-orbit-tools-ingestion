@@ -22,6 +22,16 @@ Layout::
     data/interim/candidates_verified.jsonl            one record per candidate
     data/interim/candidates_verification_report.json  auditable pass summary
 
+Input
+-----
+Production verification consumes the *official-URL resolution* artefact
+``data/interim/candidates_resolved.jsonl`` (see
+:mod:`src.candidates.resolution`) via :func:`load_resolved_candidates`, because
+that dataset carries the grounded official URLs read off directory detail
+pages. :func:`load_prepared_candidates` remains the fallback reader for the
+older ``candidates_prepared.jsonl`` artefact. Neither reader promotes a
+directory claim to a verified fact.
+
 Hard rule: verification artefacts are written under ``data/interim/`` only.
 ``data/final/`` is reserved for curated, published records, so
 :func:`persist_verification` refuses to write there — see
@@ -33,7 +43,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
-from src.candidates.prepare import PreparedCandidate
+from src.candidates.prepare import CandidatePreparer, PreparedCandidate
+from src.candidates.resolution import PROVENANCE_KEY, RESOLVED_FILENAME
+from src.candidates.store import candidate_from_dict
 from src.core.errors import VerificationError
 from src.core.io import read_jsonl, write_json, write_jsonl
 from src.core.logging_setup import get_logger
@@ -45,9 +57,12 @@ logger = get_logger("verification.store")
 __all__ = [
     "VERIFIED_FILENAME",
     "VERIFICATION_REPORT_FILENAME",
+    "RESOLVED_FILENAME",
     "FORBIDDEN_DIR_NAMES",
     "discovery_provenance",
     "load_prepared_candidates",
+    "load_resolved_candidates",
+    "load_verification_input",
     "verification_record",
     "persist_verification",
 ]
@@ -111,6 +126,93 @@ def load_prepared_candidates(
         extra={"path": str(path), "loaded": len(loaded)},
     )
     return loaded, str(path)
+
+
+def load_resolved_candidates(
+    path: str | Path,
+) -> tuple[list[PreparedCandidate], str]:
+    """Rehydrate ``candidates_resolved.jsonl`` into prepared candidates.
+
+    This is the **production** verification input: the resolution stage wrote
+    a grounded official URL onto each record (``website``) plus an
+    ``official_url_provenance`` block saying where that URL came from. Those
+    URLs are what verification must go and check.
+
+    A resolved row is a raw discovery record plus provenance, not a prepared
+    record, so it is rehydrated through the *existing* stages verbatim —
+    :func:`src.candidates.store.candidate_from_dict` then
+    :class:`~src.candidates.prepare.CandidatePreparer` — rather than a second,
+    parallel normalizer. Identity, normalization and issue flagging therefore
+    stay byte-for-byte the same as ``python run.py prepare`` produces.
+
+    The resolution provenance is carried through on ``raw_signals`` under
+    :data:`~src.candidates.resolution.PROVENANCE_KEY` so the persisted
+    discovery block still records that the URL is a *directory claim* awaiting
+    verification. Nothing is invented: a row without a usable name/pointer is
+    skipped, exactly as elsewhere.
+
+    Returns ``(candidates, source_label)``.
+    """
+    path = Path(path)
+    if not path.exists():
+        return [], str(path)
+
+    preparer = CandidatePreparer()
+    loaded: list[PreparedCandidate] = []
+    skipped = 0
+    for record in read_jsonl(path):
+        if not isinstance(record, Mapping):
+            skipped += 1
+            continue
+        candidate = candidate_from_dict(record)
+        if candidate is None:
+            skipped += 1
+            continue
+        prepared, _rejected = preparer.prepare(candidate)
+        if prepared is None:
+            skipped += 1
+            continue
+        provenance = record.get(PROVENANCE_KEY)
+        if isinstance(provenance, Mapping):
+            # A claim, kept verbatim next to the other observed signals.
+            prepared.raw_signals[PROVENANCE_KEY] = dict(provenance)
+        loaded.append(prepared)
+
+    logger.info(
+        "resolved candidates loaded for verification",
+        extra={"path": str(path), "loaded": len(loaded), "skipped": skipped},
+    )
+    return loaded, str(path)
+
+
+def load_verification_input(
+    interim_dir: str | Path,
+) -> tuple[list[PreparedCandidate], str, str]:
+    """Pick the verification input, preferring the resolved candidate feed.
+
+    Returns ``(candidates, source_label, source_kind)`` where ``source_kind``
+    is one of ``"resolved"``, ``"prepared"`` or ``"none"``.
+
+    Precedence is deliberate and **not** a silent fallback chain: when
+    ``candidates_resolved.jsonl`` exists it is the only input considered, even
+    if it turns out to be empty or unreadable. Falling back to the prepared /
+    raw discovery feed in that case would quietly verify ungrounded directory
+    URLs instead of the resolved official ones.
+    """
+    from src.candidates.prepare import INTERIM_FILENAME
+
+    interim = Path(interim_dir)
+    resolved_path = interim / RESOLVED_FILENAME
+    if resolved_path.exists():
+        candidates, source = load_resolved_candidates(resolved_path)
+        return candidates, source, "resolved"
+
+    prepared_path = interim / INTERIM_FILENAME
+    if prepared_path.exists():
+        candidates, source = load_prepared_candidates(prepared_path)
+        return candidates, source, "prepared"
+
+    return [], str(resolved_path), "none"
 
 
 def _prepared_from_dict(record: Any) -> PreparedCandidate | None:

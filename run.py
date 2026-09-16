@@ -353,42 +353,76 @@ def cmd_resolve_urls(args: argparse.Namespace) -> int:
 
 
 def cmd_verify(args: argparse.Namespace) -> int:
-    """Verify prepared candidates against their official websites.
+    """Verify resolved candidates against their official websites.
 
-    Reads ``data/interim/candidates_prepared.jsonl`` (falling back to
-    preparing the stored discovery artefacts when it is absent), runs the
-    official-site verifier, and writes
-    ``data/interim/candidates_verified.jsonl`` plus a verification report.
+    Input precedence (production first):
+
+    1. ``data/interim/candidates_resolved.jsonl`` — the output of
+       ``python run.py resolve-urls``. These records carry the grounded
+       official URLs read off directory detail pages, and they are what
+       verification must check. When this artefact exists it is the **only**
+       input considered: there is no silent fallback to the raw/prepared
+       discovery feed, because that would verify ungrounded listing URLs.
+    2. ``data/interim/candidates_prepared.jsonl`` — legacy fallback, used only
+       when no resolved artefact exists.
+    3. the stored discovery artefacts, prepared in memory — last resort.
+
+    Writes ``data/interim/candidates_verified.jsonl`` plus a verification
+    report.
 
     Network access is **opt-in**: without ``--live`` the stage runs through an
     offline HTTP client and makes no network calls at all, which is how the
     wiring is exercised safely. Use ``--limit`` to keep the first live pass a
     small spot check (10–20 candidates) rather than a bulk crawl.
     """
-    from src.candidates.prepare import INTERIM_FILENAME, CandidatePreparer
+    from src.candidates.prepare import CandidatePreparer
     from src.candidates.store import load_discovery_dir
-    from src.verification.store import load_prepared_candidates
+    from src.verification.store import RESOLVED_FILENAME, load_verification_input
 
     settings = get_settings(reload=True)
     settings.paths.ensure()
 
     interim = settings.paths.resolve("interim")
-    prepared, source = load_prepared_candidates(interim / INTERIM_FILENAME)
-    if not prepared:
-        # No prepared artefact yet: prepare the stored discovery candidates in
-        # memory rather than asking the user to re-run a previous stage.
+    prepared, source, source_kind = load_verification_input(interim)
+
+    if not prepared and source_kind == "none":
+        # Neither a resolved nor a prepared artefact exists: prepare the stored
+        # discovery candidates in memory rather than asking the user to re-run
+        # a previous stage.
         candidates, _ = load_discovery_dir(settings.paths.resolve("raw"))
         prepared, _rejected, _report = CandidatePreparer().prepare_many(candidates)
-        source = "data/raw/discovery/ (prepared in memory)"
+        if prepared:
+            source = "data/raw/discovery/ (prepared in memory)"
+            source_kind = "discovery_in_memory"
 
     if not prepared:
-        print(json.dumps({"prepared_candidates": 0, "verified": 0}, indent=2))
         print(
-            "\nNo prepared candidates found. Run `python run.py discover` and "
-            "`python run.py prepare` first — nothing is fabricated when there "
-            "is no input.",
-            file=sys.stderr,
+            json.dumps(
+                {
+                    "input_source": source,
+                    "input_source_kind": source_kind,
+                    "prepared_candidates": 0,
+                    "verified": 0,
+                },
+                indent=2,
+            )
         )
+        if source_kind == "resolved":
+            print(
+                f"\n{RESOLVED_FILENAME} exists but yielded no usable candidates. "
+                "Refusing to fall back to the raw/prepared discovery feed: that "
+                "would verify ungrounded directory URLs instead of the resolved "
+                "official ones. Re-run `python run.py resolve-urls --live` or "
+                "inspect the artefact — nothing is fabricated here.",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                "\nNo candidates found to verify. Run `python run.py discover`, "
+                "then `python run.py resolve-urls --live` first — nothing is "
+                "fabricated when there is no input.",
+                file=sys.stderr,
+            )
         return 1
 
     pipeline = ToolsPipeline(settings)
@@ -397,6 +431,8 @@ def cmd_verify(args: argparse.Namespace) -> int:
         live=args.live,
         limit=args.limit,
         persist=not args.no_persist,
+        input_source=source,
+        input_source_kind=source_kind,
     )
 
     stage = pipeline.report.stage("verify_candidates")
@@ -404,6 +440,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
         json.dumps(
             {
                 "input_source": source,
+                "input_source_kind": source_kind,
                 "prepared_candidates": len(prepared),
                 "live": args.live,
                 "limit": args.limit,
@@ -615,11 +652,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     verify_parser = sub.add_parser(
         "verify",
-        help="verify prepared candidates against their official websites",
+        help="verify resolved candidates against their official websites",
         description=(
-            "Official-website verification. Offline by default: pass --live to "
-            "allow real network calls, and keep the first live pass small with "
-            "--limit 10."
+            "Official-website verification. Reads the resolved candidate feed "
+            "data/interim/candidates_resolved.jsonl when it exists (the "
+            "grounded official URLs produced by `resolve-urls`), otherwise "
+            "falls back to candidates_prepared.jsonl. Offline by default: pass "
+            "--live to allow real network calls, and keep the first live pass "
+            "small with --limit 10."
         ),
     )
     verify_parser.add_argument(

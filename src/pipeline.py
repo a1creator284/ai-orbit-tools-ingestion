@@ -311,6 +311,8 @@ class ToolsPipeline:
         live: bool = False,
         limit: int | None = None,
         persist: bool = True,
+        input_source: str | None = None,
+        input_source_kind: str | None = None,
     ) -> tuple[list[VerificationResult], VerificationReport]:
         """Verify prepared candidates against their **official** websites.
 
@@ -332,6 +334,12 @@ class ToolsPipeline:
         ``limit`` caps how many candidates are processed, so the first live
         pass can be a small spot check instead of a bulk crawl.
 
+        ``input_source`` / ``input_source_kind`` describe *where the candidates
+        came from* (e.g. ``data/interim/candidates_resolved.jsonl`` /
+        ``"resolved"``). They are recorded verbatim on the stage stats and the
+        persisted report so a reader can tell whether the grounded, resolved
+        official URLs were verified or the older prepared feed.
+
         Results are persisted to ``data/interim/`` with discovery provenance
         and official evidence kept in separate blocks. Nothing is written to
         ``data/final/``.
@@ -343,6 +351,8 @@ class ToolsPipeline:
         batch = list(prepared)[:limit] if limit is not None and limit >= 0 else list(prepared)
         stats.details["live"] = live
         stats.details["limit"] = limit
+        stats.details["input_source"] = input_source
+        stats.details["input_source_kind"] = input_source_kind
         stats.details["considered"] = len(batch)
         stats.details["skipped_by_limit"] = len(prepared) - len(batch)
         stats.details["with_official_url"] = sum(
@@ -376,6 +386,8 @@ class ToolsPipeline:
                     "limit": limit,
                     "input_candidates": len(prepared),
                     "considered": len(batch),
+                    "input_source": input_source,
+                    "input_source_kind": input_source_kind,
                 },
             )
             stats.details["artefacts"] = artefacts
