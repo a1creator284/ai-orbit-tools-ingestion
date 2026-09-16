@@ -466,6 +466,90 @@ Not done, by design: no bulk crawl, no enrichment, no LLM descriptions, no
 
 ---
 
+### Run #11 — checkpoint audit + resumed official-URL production
+
+Run #10 left the official-URL resolution stage mid-production at `f42c8b7`.
+This run **audited that checkpoint before resuming it**, because the published
+report disagreed with the dataset it described.
+
+**The reported discrepancy: 2,266 rows on disk vs `output_records: 2200`.**
+
+The audit was run first, against the artefacts themselves, and it cleared the
+data completely:
+
+| Check | Result |
+|---|---|
+| Lines in `candidates_resolved.jsonl` | 2,266 |
+| Blank lines | 0 |
+| Malformed JSON lines | 0 |
+| Duplicate candidate keys (`record_key`) | **0** |
+| Resolved keys absent from `data/raw/candidates.jsonl` | **0** |
+| `data/raw/candidates.jsonl` modified | no (md5 verified) |
+
+So **no record was corrupt, duplicated, invented or orphaned**, and nothing
+had to be deleted to reconcile the counts. The gap had two distinct causes,
+only one of which was a defect.
+
+**Cause 1 — a real defect: the report was only written when `run()` returned.**
+The state file records three live batches: 2,197 records, then 3, then a third
+that wrote 50 and is marked `"finished": false`. That third batch actually
+appended 66 rows (2,200 → 2,266) and was then interrupted, so the report left
+on disk was still the artefact of the *second*, finished batch — describing
+2,200 rows while 2,266 were persisted. The module's own docstring promises the
+report "is derived from the persisted dataset ... so the published statistics
+can never disagree with the file they describe", and an interrupted pass broke
+exactly that promise. The 66 rows were sound: all 66 were fetched, 61 resolved
+with grounded evidence and 5 recorded `only_shared_hosts`.
+
+*Fix (smallest path):* the report is now rebuilt and rewritten at **every
+checkpoint** alongside the state file, via a single `_build_report()` helper so
+a checkpoint report and a final report cannot describe one file differently. A
+new `complete` flag marks a report written mid-pass. Recomputation is a linear
+read of the output (~60 ms at 2,266 rows) — far cheaper than publishing stale
+numbers.
+
+**Cause 2 — not a defect: `pending: 1710` was correctly scoped.** `1710`
+looked inconsistent with `3957 − 2200 = 1757`, but the second batch was run
+with `--source dang`, and 1,710 is *exactly* the number of Dang.ai candidates
+outstanding at that point (confirmed by recomputation per source). `pending`
+is deliberately measured within the pass's scope, so no counting logic was
+changed — the scope is now published with the number as `scope_sources` /
+`pending_scope` instead of being left to inference.
+
+**A third fact the audit surfaced, now documented and covered:** the raw feed
+has **3,957 lines but only 3,946 distinct candidates**. Eleven candidates
+appear on two lines each (always blank `website` first, populated second).
+Those collapse to one output row each, so `output_records` is legitimately
+below `input_records` even on a complete pass — `input_records − output_records`
+is *not* a valid pending calculation. All 11 production cases were checked
+individually: the populated line wins in every one, and **no candidate lost a
+URL**.
+
+**Resume safety was proven before spending any live budget.** The runner was
+resumed against the real 2,266-row production dataset with a fake client
+(zero network), then with `--live --limit 10`:
+
+* the 2,266 pre-existing rows stayed **byte-identical** (md5 of the file
+  prefix), in place and in order;
+* **no already-completed candidate was re-fetched** — only pending candidates
+  were requested;
+* resolved URLs, provenance and the 5 unresolved rows were preserved;
+* `data/raw/candidates.jsonl` was untouched (md5 verified);
+* `pending` fell exactly by the number of rows added (1,680 → 1,675 → 1,670).
+
+`--restart` was never used. The live pass then resumed with the existing
+persisted state, fetching **directory detail pages only** — no official product
+site was crawled — through the existing robots handling, per-host rate limiting
+(`dang: 0.3 rps`), retry/backoff, URL normalization and resolver logic.
+
+**Evidence quality is unchanged.** Every resolved URL still comes from either
+JSON-LD `SoftwareApplication.url` or an explicit outbound Visit link; no slug
+guessing, search engines, social or app-store URLs. Every enriched record keeps
+`verification_status: "unverified"` — **a resolved URL is a directory claim,
+not verification.**
+
+---
+
 ## Tests
 
 | Suite | Count |

@@ -30,7 +30,8 @@ module's only job:
   counters, so the published statistics can never disagree with the file they
   describe — and cannot be fabricated. It is rewritten at every checkpoint,
   not only when a pass finishes, so an *interrupted* pass also leaves a report
-  that matches the rows on disk (``complete: false`` marks it as mid-pass).
+  that matches the rows on disk (``complete: false`` marks it as mid-pass, and
+  ``pending`` is ``null`` there because the outstanding set is not yet known).
 * **``pending`` is scoped.** With ``--source`` the pass only considers that
   directory, so ``pending`` counts what is outstanding *within that scope* and
   the report names the scope in ``scope_sources`` / ``pending_scope``. It is
@@ -354,7 +355,11 @@ class ResolutionRunReport:
     failures: dict[str, int] = field(default_factory=dict)
     bases: dict[str, int] = field(default_factory=dict)
     by_source: dict[str, dict[str, int]] = field(default_factory=dict)
-    pending: int = 0
+    #: ``None`` while a pass is still running. Pending is the set difference
+    #: between the in-scope input keys and what is persisted, so it is only
+    #: knowable once the whole input has been streamed. Reporting the
+    #: part-way value would publish a confident ``0`` mid-pass.
+    pending: int | None = 0
     #: ``None`` when the pass covered the whole feed, otherwise the sorted
     #: ``--source`` keys it was restricted to. ``pending`` is counted *within
     #: this scope*, so without it a source-filtered report's ``pending`` looks
@@ -395,6 +400,7 @@ class ResolutionRunReport:
                 if not self.scope_sources
                 else "sources: " + ", ".join(self.scope_sources)
             ),
+            "pending_known": self.pending is not None,
             "already_had_official_url": self.already_had_official_url,
             "needed_resolution": self.needed_resolution,
             "attempted": self.attempted,
@@ -665,7 +671,11 @@ class OfficialUrlResolutionRunner:
                     input_path=input_path,
                     input_records=input_records,
                     unreadable=unreadable,
-                    pending=len(in_scope_keys - done - seen_keys),
+                    # Not yet knowable: the input has only been streamed as
+                    # far as this record, so the outstanding set is still
+                    # being discovered. Publishing the part-way difference
+                    # would claim a confident "0 pending" mid-pass.
+                    pending=None,
                     sources=sources,
                     complete=False,
                 )
@@ -720,7 +730,7 @@ class OfficialUrlResolutionRunner:
         input_path: Path,
         input_records: int,
         unreadable: int,
-        pending: int,
+        pending: int | None,
         sources: set[str] | None,
         complete: bool,
     ) -> ResolutionRunReport:

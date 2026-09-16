@@ -569,6 +569,25 @@ def test_interrupted_pass_still_leaves_a_report_matching_the_rows_on_disk(
     assert on_disk["output_records"] == len(rows) == 4
     # And it says out loud that the pass did not finish.
     assert on_disk["complete"] is False
+    # Pending is unknown mid-pass (the input was not streamed to the end), so
+    # it is reported as null rather than as a confident "nothing left to do".
+    assert on_disk["pending"] is None
+    assert on_disk["pending_known"] is False
+
+
+def test_finished_pass_reports_a_known_pending_count(tmp_path: Path) -> None:
+    _, report, interim = run_stage(
+        tmp_path,
+        [
+            raw("Axiom AI Work Assistant", listing_url=DANG_URL),
+            raw("BonBon AI", listing_url=DANG_BONBON_URL),
+        ],
+        limit=1,
+    )
+    assert report.pending == 1
+    on_disk = json.loads((interim / RESOLUTION_REPORT_FILENAME).read_text(encoding="utf-8"))
+    assert on_disk["pending"] == 1
+    assert on_disk["pending_known"] is True
 
 
 def test_checkpoint_report_is_rewritten_during_the_pass(tmp_path: Path) -> None:
