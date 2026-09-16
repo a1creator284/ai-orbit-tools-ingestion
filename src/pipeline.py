@@ -44,7 +44,9 @@ from src.discovery.base import CandidateTool, DiscoverySource
 from src.discovery.registry import SourceRegistry
 from src.discovery.runner import DiscoveryRunner
 from src.enrichment.base import EnrichmentPipeline
+from src.enrichment.editorial import EditorialSynthesizer
 from src.enrichment.relationships import RelationshipExtractor
+from src.extraction.official_page import OfficialFacts, OfficialFactsExtractor
 from src.models.base import Relationship
 from src.models.tool import Tool
 from src.scoring.filter import FilterDecision, FilterReport, QualityFilter
@@ -178,7 +180,12 @@ class ToolsPipeline:
         self.quality_filter = quality_filter or QualityFilter(self.settings.scoring)
         #: Decisions from the last threshold-filter pass (persisted in _persist).
         self._filter_decisions: list[FilterDecision] = []
-        self.enrichment = enrichment or EnrichmentPipeline()
+        # Editorial synthesis is deterministic and grounded in verified facts
+        # only (see src/enrichment/editorial.py), so it is safe to enable by
+        # default and needs no LLM or API key.
+        self.enrichment = enrichment or EnrichmentPipeline([EditorialSynthesizer()])
+        #: ``tool.id -> OfficialFacts`` from the last verification pass.
+        self._official_facts: dict[str, OfficialFacts] = {}
         self.relationships = relationships or RelationshipExtractor()
         self.validator = validator or ToolValidator()
         self.describer = describer
@@ -413,8 +420,33 @@ class ToolsPipeline:
         stats.finished_at = _now()
         return tools
 
-    def verify(self, tools: Sequence[Tool], *, extractors: Iterable[Any] = ()) -> list[Tool]:
-        """Verify each tool against its official website (guideline §10)."""
+    def verify(
+        self, tools: Sequence[Tool], *, extractors: Iterable[Any] | None = None
+    ) -> list[Tool]:
+        """Verify each tool against its official website **and read its facts**.
+
+        Verification alone only proves the product exists. This stage therefore
+        also injects an *official-page fact extractor* into the verifier, which
+        is what turns a proven-real record into a populated one:
+        :class:`~src.extraction.official_page.OfficialFactsExtractor` reads
+        company, description, features, use cases, capabilities, I/O,
+        platforms, integrations, API, open-source status, signup requirement,
+        pricing, limitations, version and launch date off the **same fetched
+        response** verification used.
+
+        Two guarantees matter here and are enforced by construction:
+
+        * **no fact comes from a page that was not verified** — the extractor
+          is handed the verifier's own ``FetchResult``, never a fresh fetch of
+          an arbitrary URL;
+        * **no fact is invented** — the extractor only returns values the page
+          evidenced, and the verifier applies only non-empty values, so an
+          unverifiable field stays blank.
+
+        ``extractors=None`` means "use the default official-page extractor";
+        pass an explicit (possibly empty) sequence to override it, which is how
+        tests pin the behaviour.
+        """
         stats = self.report.stage("verification")
         stats.started_at = _now()
         stats.input_count = len(tools)
@@ -428,16 +460,56 @@ class ToolsPipeline:
             return list(tools)
 
         verifier = self.verifier or OfficialSiteVerifier()
+        active = (
+            list(extractors)
+            if extractors is not None
+            else self._default_extractors(verifier)
+        )
+        stats.details["extractors"] = [type(e).__name__ for e in active]
+
         for tool in tools:
             try:
-                verifier.verify(tool, extractors=extractors)
+                verifier.verify(tool, extractors=active)
             except Exception as exc:  # noqa: BLE001
                 stats.error_count += 1
                 logger.warning("verification failed", extra={"tool": tool.name, "error": str(exc)})
+
+        # Record which fields the official page could *not* support, so a blank
+        # field is visibly "we looked and could not verify it".
+        facts_extractor = next(
+            (e for e in active if isinstance(e, OfficialFactsExtractor)), None
+        )
+        extracted_field_counts: dict[str, int] = {}
+        if facts_extractor is not None:
+            for tool in tools:
+                facts = facts_extractor.facts_by_tool.get(tool.id)
+                if facts is None:
+                    continue
+                tool.official_unverified_fields = list(facts.unverified_fields)
+                for field_name in facts.evidence:
+                    extracted_field_counts[field_name] = (
+                        extracted_field_counts.get(field_name, 0) + 1
+                    )
+            self._official_facts = dict(facts_extractor.facts_by_tool)
+
         stats.output_count = len(tools)
         stats.details["verified"] = sum(1 for tool in tools if tool.is_verified)
+        stats.details["records_with_official_facts"] = sum(
+            1 for tool in tools if tool.official_evidence
+        )
+        stats.details["extracted_fields"] = dict(sorted(extracted_field_counts.items()))
         stats.finished_at = _now()
         return list(tools)
+
+    def _default_extractors(self, verifier: OfficialSiteVerifier) -> list[Any]:
+        """The official-page extractor, sharing the verifier's HTTP client.
+
+        Sharing the client is what keeps the extra pricing-page fetch polite:
+        it inherits the same rate limiter, robots rules and response cache, so
+        enabling extraction does not turn into a second crawl.
+        """
+        client = getattr(verifier, "client", None)
+        return [OfficialFactsExtractor(client=client)]
 
     def filter_quality(self, tools: Sequence[Tool]) -> list[Tool]:
         """Drop records already rejected by verification (guideline §4)."""
@@ -762,6 +834,17 @@ class ToolsPipeline:
             ),
             "validation": write_json(
                 paths.resolve("processed") / "validation.json", list(validation_results)
+            ),
+            # The full official-page evidence trail: one row per record we read
+            # facts from, listing what each field was justified by and which
+            # fields the page did not support. This is what makes a published
+            # fact auditable without re-fetching the site.
+            "official_facts": write_jsonl(
+                paths.resolve("interim") / "official_facts.jsonl",
+                [
+                    {"tool_id": tool_id, **facts.to_dict()}
+                    for tool_id, facts in sorted(self._official_facts.items())
+                ],
             ),
             "run_report": write_json(
                 paths.resolve("final") / "run_report.json", self.report.to_dict()

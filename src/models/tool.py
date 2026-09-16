@@ -384,6 +384,17 @@ class Tool(BaseEntity):
         default_factory=list, description="Every directory/listing the tool was discovered in"
     )
     verification: VerificationRecord = Field(default_factory=VerificationRecord)
+    #: ``field name -> what on the official page justified that value``.
+    #: Written by :class:`src.extraction.official_page.OfficialFactsExtractor`
+    #: so any published fact can be audited without re-fetching the site. An
+    #: entry here is a *claim about our own evidence*, never about the product.
+    official_evidence: dict[str, str] = Field(
+        default_factory=dict,
+        description="Per-field justification read off the official website",
+    )
+    #: Fields the official page was searched for and did **not** support. Kept
+    #: explicitly so \"blank\" is visibly *unverified*, not merely forgotten.
+    official_unverified_fields: list[str] = Field(default_factory=list)
 
     # ------------------------------------------------- pipeline metadata
     quality: ScoreBreakdown | None = None
