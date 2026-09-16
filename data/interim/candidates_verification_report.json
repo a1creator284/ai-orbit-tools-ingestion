@@ -1,29 +1,41 @@
 {
-  "started_at": "2026-09-15T20:57:09.831531+00:00",
-  "finished_at": "2026-09-15T20:57:11.576025+00:00",
-  "input": 50,
-  "fetched": 50,
-  "verified": 40,
-  "partially_verified": 7,
-  "unverified": 3,
-  "unreachable": 0,
+  "started_at": "2026-09-16T23:46:26.890530+00:00",
+  "finished_at": "2026-09-16T23:46:26.912318+00:00",
+  "input": 225,
+  "fetched": 223,
+  "verified": 168,
+  "partially_verified": 28,
+  "unverified": 25,
+  "unreachable": 4,
   "failed": 0,
-  "needs_review": 10,
+  "needs_review": 55,
   "status_counts": {
-    "partially_verified": 7,
-    "unverified": 3,
-    "verified": 40
+    "partially_verified": 28,
+    "unreachable": 4,
+    "unverified": 25,
+    "verified": 168
   },
   "failure_counts": {
-    "bot_challenge": 1,
-    "identity_not_confirmed": 2,
-    "no_product_signal": 7
+    "bot_challenge": 4,
+    "fetch_failed": 2,
+    "http_error": 2,
+    "identity_not_confirmed": 16,
+    "no_product_signal": 35,
+    "off_domain_redirect": 2,
+    "thin_content": 6
   },
   "live": true,
-  "limit": 50,
-  "input_candidates": 200,
-  "considered": 50,
+  "limit": null,
+  "input_candidates": 3441,
+  "considered": 225,
+  "input_source": "/home/user/webapp/data/interim/candidates_resolved.jsonl",
+  "input_source_kind": "resolved",
+  "resumable": true,
+  "resumed_from_records": 50,
+  "processed_this_pass": 175,
+  "complete": false,
   "artefacts": {
-    "verified_candidates": "/home/user/webapp/data/interim/candidates_verified.jsonl"
+    "verified_candidates": "/home/user/webapp/data/interim/candidates_verified.jsonl",
+    "verification_state": "/home/user/webapp/data/interim/candidates_verification_state.json"
   }
 }
