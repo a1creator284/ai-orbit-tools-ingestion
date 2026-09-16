@@ -291,6 +291,67 @@ def cmd_prepare(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_resolve_urls(args: argparse.Namespace) -> int:
+    """Resolve official URLs for stored raw candidates from their detail pages.
+
+    Reads ``data/raw/candidates.jsonl`` (never rewriting it) and writes the
+    enriched dataset plus a report to ``data/interim/``. Offline unless
+    ``--live`` is passed, resumable by default, and it fetches *directory
+    detail pages only* — never the products' own sites.
+
+    A resolved URL is a directory claim, not verification.
+    """
+    from src.candidates.resolution import OfficialUrlResolutionRunner
+    from src.discovery.registry import load_source_configs
+
+    settings = get_settings(reload=True)
+    settings.paths.ensure()
+
+    input_path = Path(args.input) if args.input else settings.paths.resolve("raw") / "candidates.jsonl"
+    if not input_path.exists():
+        print(
+            f"No candidate feed at {input_path}. Run `python run.py discover` first — "
+            "nothing is fabricated when discovery produced no data.",
+            file=sys.stderr,
+        )
+        return 1
+
+    # Reuse the politeness already declared per source rather than inventing a
+    # new rate here.
+    host_rates: dict[str, float] = {}
+    try:
+        from urllib.parse import urlsplit
+
+        for config in load_source_configs().values():
+            target = config.homepage or config.listing_url
+            host = urlsplit(target or "").netloc
+            if host:
+                host_rates[host] = config.rate_limit_rps
+    except Exception:  # noqa: BLE001 - politeness config is best-effort
+        host_rates = {}
+
+    runner = OfficialUrlResolutionRunner(
+        live=bool(args.live),
+        checkpoint_every=args.checkpoint_every,
+        host_rates=host_rates,
+    )
+    report = runner.run(
+        input_path,
+        interim_dir=settings.paths.resolve("interim"),
+        limit=args.limit,
+        resume=not args.restart,
+        sources=set(args.source) if args.source else None,
+    )
+    print(json.dumps(report.to_dict(), indent=2))
+    if not args.live:
+        print(
+            "\nOffline pass: no network calls were made. Pass --live to read the "
+            "directory detail pages for real.",
+            file=sys.stderr,
+        )
+    return 0
+
+
 def cmd_verify(args: argparse.Namespace) -> int:
     """Verify prepared candidates against their official websites.
 
@@ -507,6 +568,50 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-persist", action="store_true", help="do not write artefacts"
     )
     prepare_parser.set_defaults(func=cmd_prepare)
+
+    resolve_parser = sub.add_parser(
+        "resolve-urls",
+        help="resolve official URLs for stored candidates from directory detail pages",
+        description=(
+            "Reads data/raw/candidates.jsonl (never modifies it) and writes "
+            "data/interim/candidates_resolved.jsonl plus a resolution report. "
+            "Offline by default: pass --live to read the directory detail "
+            "pages. Resumable — rerun to continue where the last pass stopped. "
+            "A resolved URL is a directory claim, not verification."
+        ),
+    )
+    resolve_parser.add_argument(
+        "--input", default=None, help="candidate feed (default data/raw/candidates.jsonl)"
+    )
+    resolve_parser.add_argument(
+        "--live",
+        action="store_true",
+        help=(
+            "REQUIRED to fetch detail pages; without it the stage makes no "
+            "network calls and only records what it would have read"
+        ),
+    )
+    resolve_parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="max detail pages to fetch in this pass (the rest stay pending)",
+    )
+    resolve_parser.add_argument(
+        "--source", action="append", default=None, help="source key (repeatable)"
+    )
+    resolve_parser.add_argument(
+        "--restart",
+        action="store_true",
+        help="discard the existing enriched artefact instead of resuming it",
+    )
+    resolve_parser.add_argument(
+        "--checkpoint-every",
+        type=int,
+        default=25,
+        help="refresh the state file every N written records",
+    )
+    resolve_parser.set_defaults(func=cmd_resolve_urls)
 
     verify_parser = sub.add_parser(
         "verify",
