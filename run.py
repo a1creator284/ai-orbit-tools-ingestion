@@ -24,6 +24,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
 from src.core.config import get_settings
 from src.core.io import read_jsonl, write_json, write_jsonl
@@ -374,10 +375,26 @@ def cmd_verify(args: argparse.Namespace) -> int:
     offline HTTP client and makes no network calls at all, which is how the
     wiring is exercised safely. Use ``--limit`` to keep the first live pass a
     small spot check (10–20 candidates) rather than a bulk crawl.
+
+    A persisting pass is **resumable**: results are appended to
+    ``candidates_verified.jsonl`` as they are produced and progress is
+    checkpointed, so an interrupted production run keeps everything it had
+    already verified and a rerun continues from there without duplicating a
+    record. Pass ``--restart`` to replace the artefact instead, and
+    ``--no-persist`` for a throwaway in-memory pass.
     """
     from src.candidates.prepare import CandidatePreparer
     from src.candidates.store import load_discovery_dir
-    from src.verification.store import RESOLVED_FILENAME, load_verification_input
+    from src.verification.runner import (
+        VERIFICATION_STATE_FILENAME,
+        CandidateVerificationRunner,
+    )
+    from src.verification.store import (
+        VERIFICATION_REPORT_FILENAME,
+        VERIFIED_FILENAME,
+        RESOLVED_FILENAME,
+        load_verification_input,
+    )
 
     settings = get_settings(reload=True)
     settings.paths.ensure()
@@ -425,17 +442,54 @@ def cmd_verify(args: argparse.Namespace) -> int:
             )
         return 1
 
-    pipeline = ToolsPipeline(settings)
-    _results, report = pipeline.verify_candidates(
-        prepared,
-        live=args.live,
-        limit=args.limit,
-        persist=not args.no_persist,
-        input_source=source,
-        input_source_kind=source_kind,
-    )
+    if args.no_persist:
+        # Throwaway pass: nothing is written, so there is nothing to resume
+        # from and the in-memory batch path is exactly right.
+        pipeline = ToolsPipeline(settings)
+        _results, report = pipeline.verify_candidates(
+            prepared,
+            live=args.live,
+            limit=args.limit,
+            persist=False,
+            input_source=source,
+            input_source_kind=source_kind,
+        )
+        stage = pipeline.report.stage("verify_candidates")
+        considered = stage.details.get("considered")
+        with_official_url = stage.details.get("with_official_url")
+        artefacts: dict[str, Any] = {}
+    else:
+        # Production pass: append + checkpoint, so an interruption never
+        # discards completed verification and a rerun resumes cleanly.
+        #
+        # The verifier is still chosen by the pipeline's single selection seam
+        # (`_verifier_for`), so the offline/live guarantee and any injected
+        # verifier behave identically on both paths — the resumable runner
+        # changes *when results are written*, never which rules decide them.
+        pipeline = ToolsPipeline(settings)
+        runner = CandidateVerificationRunner(
+            verifier=pipeline._verifier_for(live=args.live),
+            live=args.live,
+            checkpoint_every=args.checkpoint_every,
+        )
+        report = runner.run(
+            prepared,
+            interim_dir=interim,
+            limit=args.limit,
+            resume=not args.restart,
+            input_source=source,
+            input_source_kind=source_kind,
+        )
+        considered = report.input_count
+        with_official_url = sum(
+            1 for candidate in prepared if getattr(candidate, "website", None)
+        )
+        artefacts = {
+            "verified_candidates": str(interim / VERIFIED_FILENAME),
+            "verification_report": str(interim / VERIFICATION_REPORT_FILENAME),
+            "verification_state": str(interim / VERIFICATION_STATE_FILENAME),
+        }
 
-    stage = pipeline.report.stage("verify_candidates")
     print(
         json.dumps(
             {
@@ -444,10 +498,10 @@ def cmd_verify(args: argparse.Namespace) -> int:
                 "prepared_candidates": len(prepared),
                 "live": args.live,
                 "limit": args.limit,
-                "considered": stage.details.get("considered"),
-                "with_official_url": stage.details.get("with_official_url"),
+                "considered": considered,
+                "with_official_url": with_official_url,
                 "report": report.to_dict(),
-                "artefacts": stage.details.get("artefacts", {}),
+                "artefacts": artefacts,
             },
             indent=2,
         )
@@ -659,7 +713,9 @@ def build_parser() -> argparse.ArgumentParser:
             "grounded official URLs produced by `resolve-urls`), otherwise "
             "falls back to candidates_prepared.jsonl. Offline by default: pass "
             "--live to allow real network calls, and keep the first live pass "
-            "small with --limit 10."
+            "small with --limit 10. Resumable: a persisting pass appends and "
+            "checkpoints every result, so rerunning continues where it "
+            "stopped without duplicating a record."
         ),
     )
     verify_parser.add_argument(
@@ -678,6 +734,20 @@ def build_parser() -> argparse.ArgumentParser:
     )
     verify_parser.add_argument(
         "--no-persist", action="store_true", help="do not write artefacts"
+    )
+    verify_parser.add_argument(
+        "--restart",
+        action="store_true",
+        help=(
+            "ignore already-verified records and rebuild the artefact from "
+            "scratch (default is to resume)"
+        ),
+    )
+    verify_parser.add_argument(
+        "--checkpoint-every",
+        type=int,
+        default=25,
+        help="refresh the progress state every N verified candidates",
     )
     verify_parser.set_defaults(func=cmd_verify)
 
