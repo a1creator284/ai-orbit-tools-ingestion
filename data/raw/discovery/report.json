@@ -1,31 +1,35 @@
 {
-  "started_at": "2026-09-16T04:14:22.189572+00:00",
-  "finished_at": "2026-09-16T04:14:22.397307+00:00",
-  "total_emitted": 48,
-  "total_unique": 48,
+  "started_at": "2026-09-16T18:20:13.820261+00:00",
+  "finished_at": "2026-09-16T18:22:31.284655+00:00",
+  "total_emitted": 856,
+  "total_unique": 856,
   "cross_source_duplicates": 0,
   "sources": {
-    "aitoolnet": {
-      "source": "aitoolnet",
-      "plans_attempted": 2,
+    "creati": {
+      "source": "creati",
+      "plans_attempted": 41,
       "plans_blocked": 0,
-      "pages_fetched": 2,
+      "pages_fetched": 41,
       "pages_failed": 0,
-      "cards_seen": 57,
-      "cards_unparsed": 3,
-      "candidates_emitted": 48,
-      "duplicates_skipped": 6,
+      "cards_seen": 1244,
+      "cards_unparsed": 0,
+      "candidates_emitted": 856,
+      "duplicates_skipped": 388,
       "stop_reasons": {
-        "max_pages_reached": 2
+        "max_pages_reached": 41
       },
       "errors": [],
-      "emitted": 48
+      "emitted": 856,
+      "checkpoints_written": 35
     }
   },
   "artefacts": {
-    "raw_aitoolnet": "/home/user/webapp/data/raw/discovery/aitoolnet.jsonl",
+    "raw_creati": "/home/user/webapp/data/raw/discovery/creati.jsonl",
     "merged_candidates": "/home/user/webapp/data/raw/candidates.jsonl",
-    "discovery_report": "/home/user/webapp/data/raw/discovery/report.json"
+    "discovery_report": "/home/user/webapp/data/raw/discovery/report.json",
+    "discovery_state": "/home/user/webapp/data/raw/discovery/state.json"
   },
-  "notes": []
+  "notes": [],
+  "total_pool": 907,
+  "pool_cross_source_duplicates": 1
 }

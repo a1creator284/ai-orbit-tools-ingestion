@@ -1,12 +1,12 @@
 {
   "version": 1,
-  "updated_at": "2026-09-16T18:22:17.367101+00:00",
+  "updated_at": "2026-09-16T18:25:14.260845+00:00",
   "sources": {
     "creati": {
       "completed_plans": [],
-      "stored_candidates": 804,
+      "stored_candidates": 1354,
       "batches": 0,
-      "last_checkpoint_at": "2026-09-16T18:22:17.367078+00:00"
+      "last_checkpoint_at": "2026-09-16T18:25:14.260806+00:00"
     }
   },
   "batches": []
