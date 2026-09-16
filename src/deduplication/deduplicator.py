@@ -70,6 +70,8 @@ class DedupReport:
     review_pairs: list[tuple[str, str, float, str]] = field(default_factory=list)
     comparisons: int = 0
     clusters: dict[str, list[str]] = field(default_factory=dict)
+    #: ``(blocking_key, size)`` for every block skipped as non-discriminative.
+    skipped_blocks: list[tuple[str, int]] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -77,6 +79,10 @@ class DedupReport:
             "output_count": self.output_count,
             "merged_count": self.merged_count,
             "comparisons": self.comparisons,
+            "skipped_block_count": len(self.skipped_blocks),
+            "skipped_blocks": [
+                {"key": key, "size": size} for key, size in sorted(self.skipped_blocks)
+            ],
             "review_pair_count": len(self.review_pairs),
             "review_pairs": [
                 {"left": a, "right": b, "confidence": round(c, 3), "explanation": e}
@@ -130,11 +136,21 @@ class Deduplicator:
 
         # ---- 2/3. pairwise matching within blocks + clustering
         compared: set[tuple[str, str]] = set()
-        for key, members in blocks.items():
-            if len(members) < 2 or len(members) > 400:
-                # oversized blocks are non-discriminative (e.g. a generic token)
-                if len(members) > 400:
-                    logger.debug("skipping oversized block", extra={"key": key, "size": len(members)})
+        for key in sorted(blocks):  # deterministic block order
+            members = blocks[key]
+            limit = self.matcher.block_limit(key)
+            if len(members) < 2 or len(members) > limit:
+                # Oversized blocks are non-discriminative (e.g. a generic name
+                # token shared by hundreds of records) and comparing them is
+                # what turns dedup into an O(n²) sweep. Skipping loses no
+                # *evidence-based* merge: identity-grade equality always also
+                # lands the pair in a precise block.
+                if len(members) > limit:
+                    report.skipped_blocks.append((key, len(members)))
+                    logger.debug(
+                        "skipping oversized block",
+                        extra={"key": key, "size": len(members), "limit": limit},
+                    )
                 continue
             for index, left_id in enumerate(members):
                 for right_id in members[index + 1 :]:
@@ -195,6 +211,21 @@ class Deduplicator:
         for other in others:
             aliases.update({other.name, *other.dedup.aliases})
         primary.dedup.aliases = sorted(a for a in aliases if a)
+
+        # provenance: every identity key and listing URL folded in is kept, so a
+        # reviewer can retrace each sighting that became this single record.
+        identity_keys = {primary.dedup.identity_key, *primary.dedup.merged_identity_keys}
+        listing_urls = list(primary.dedup.listing_urls)
+        evidence = list(primary.dedup.merge_evidence)
+        for other in others:
+            identity_keys.update({other.dedup.identity_key, *other.dedup.merged_identity_keys})
+            listing_urls = _merge_unique(listing_urls, other.dedup.listing_urls)
+            evidence = _merge_unique(evidence, other.dedup.merge_evidence)
+        primary.dedup.merged_identity_keys = sorted(
+            key for key in identity_keys if key and key != primary.dedup.identity_key
+        )
+        primary.dedup.listing_urls = listing_urls
+        primary.dedup.merge_evidence = evidence
         primary.dedup.merged_source_count = len(primary.discovery_sources)
         return primary
 
@@ -210,12 +241,25 @@ class Deduplicator:
         left, right = records[pair[0]], records[pair[1]]
         if result.decision is MatchDecision.MERGE:
             union.union(pair[0], pair[1])
+            # Persist the audit trail on *both* sides so the surviving record
+            # carries the evidence regardless of which one becomes canonical.
+            evidence = f"{result.tier.value}: {result.reason}"
+            for record in (left, right):
+                record.dedup.merge_evidence = _merge_unique(
+                    record.dedup.merge_evidence, [evidence]
+                )
         elif result.decision is MatchDecision.REVIEW:
             report.review_pairs.append((pair[0], pair[1], result.confidence, result.explain()))
             left.flag_for_review(f"possible duplicate of {right.name} ({right.id})")
             right.flag_for_review(f"possible duplicate of {left.name} ({left.id})")
             left.dedup.review_candidates = sorted({*left.dedup.review_candidates, right.id})
             right.dedup.review_candidates = sorted({*right.dedup.review_candidates, left.id})
+            left.dedup.review_reasons = _merge_unique(
+                left.dedup.review_reasons, [f"{right.id}: {result.reason}"]
+            )
+            right.dedup.review_reasons = _merge_unique(
+                right.dedup.review_reasons, [f"{left.id}: {result.reason}"]
+            )
 
     @staticmethod
     def _primary_rank(tool: Tool) -> tuple:

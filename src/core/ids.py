@@ -121,9 +121,18 @@ class IdentityKey:
 
 
 def _url_key(url: str | None, *, official: bool) -> IdentityKey | None:
-    """Identity key for a product URL, or ``None`` when it is not URL-shaped."""
+    """Identity key for a product URL, or ``None`` when it is not URL-shaped.
+
+    A **shared-host root** (``producthunt.com``, ``theresanaiforthat.com``,
+    ``vercel.app``) is rejected: it is a directory/builder landing page, so
+    keying on it would give every product listed there the same UUIDv5 and
+    silently collapse them into one record. A product *path* on such a host
+    (``apps.apple.com/app/foo``) is accepted — it does identify one product.
+    """
     identity = product_identity(url)
     if identity is None:
+        return None
+    if not identity.identifies_a_product:
         return None
     if official:
         basis = "website_domain" if identity.is_root else "website_product_url"

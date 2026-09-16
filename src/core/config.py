@@ -39,6 +39,13 @@ def _load_dotenv(path: Path) -> None:
         os.environ.setdefault(key, value)
 
 
+def _shared_host_domains() -> frozenset[str]:
+    """Shared/multi-product hosts. Imported lazily to avoid a cycle."""
+    from src.core.product_identity import SHARED_HOST_DOMAINS
+
+    return SHARED_HOST_DOMAINS
+
+
 @dataclass
 class PathsConfig:
     """Filesystem layout for pipeline artefacts."""
@@ -137,17 +144,49 @@ class DedupConfig:
     #: Similarity at or above this, but below the auto-merge threshold, is
     #: queued for human review rather than merged silently.
     review_similarity_threshold: float = 0.78
+    #: Minimum canonical-name similarity for a pair to be worth a human look
+    #: (tier E). Names alone never cause a merge — this floor only decides
+    #: whether an uncertain pair is REVIEW instead of DISTINCT.
+    review_name_floor: float = 0.82
     domain_match_is_authoritative: bool = True
+    #: Max members in a *precise* blocking key (exact product key, canonical
+    #: URL, identity key, repository, exact canonical name). Beyond this the
+    #: block is non-discriminative and is skipped rather than compared.
+    max_block_size: int = 400
+    #: Max members in a *broad* blocking key (name prefix, shared token, host,
+    #: registrable domain). These exist only to catch near-miss names, so they
+    #: must stay small — an uncapped broad block is an O(n²) sweep in disguise.
+    max_broad_block_size: int = 40
+    #: Registrable domains whose *domain* is never a product identity (app
+    #: stores, site builders, directories). Defaults to the single source of
+    #: truth in :data:`src.core.product_identity.SHARED_HOST_DOMAINS` so the ID
+    #: builder and the matcher cannot drift apart; a deployment may extend it
+    #: via ``config/settings.yaml``.
     ignore_domains: list[str] = field(
-        default_factory=lambda: [
-            "github.com", "gitlab.com", "huggingface.co", "notion.so", "notion.site",
-            "vercel.app", "netlify.app", "streamlit.app", "gumroad.com", "carrd.co",
-            "framer.app", "webflow.io", "wixsite.com", "replit.app", "glitch.me",
-            "herokuapp.com", "pages.dev", "web.app", "firebaseapp.com", "bubbleapps.io",
-            "softr.app", "canva.site", "apps.apple.com", "play.google.com",
-            "chromewebstore.google.com", "chrome.google.com", "producthunt.com",
-        ]
+        default_factory=lambda: sorted(_shared_host_domains())
     )
+
+    def __post_init__(self) -> None:
+        for name in (
+            "name_similarity_threshold",
+            "review_similarity_threshold",
+            "review_name_floor",
+        ):
+            value = float(getattr(self, name))
+            if not 0.0 <= value <= 1.0:
+                raise ConfigError(f"dedup.{name} must be within [0.0, 1.0], got {value}")
+            setattr(self, name, value)
+        if self.review_name_floor > self.name_similarity_threshold:
+            raise ConfigError(
+                "dedup.review_name_floor must not exceed "
+                "dedup.name_similarity_threshold "
+                f"({self.review_name_floor} > {self.name_similarity_threshold})"
+            )
+        for name in ("max_block_size", "max_broad_block_size"):
+            value = int(getattr(self, name))
+            if value < 2:
+                raise ConfigError(f"dedup.{name} must be >= 2, got {value}")
+            setattr(self, name, value)
 
 
 @dataclass

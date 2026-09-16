@@ -22,7 +22,7 @@ from typing import Any
 
 from pydantic import Field, computed_field, field_validator, model_validator
 
-from src.core.product_identity import product_identity_key
+from src.core.product_identity import product_identity
 from src.core.text import clean_text
 from src.core.urls import extract_registrable_domain, normalize_url
 from src.models.base import AIOrbitModel, BaseEntity, SourceRef
@@ -494,10 +494,13 @@ class Tool(BaseEntity):
             self.dedup.canonical_domain = domain
         # The canonical *product* key is host + product path, so distinct
         # products under one domain stay distinguishable (guideline §7).
+        # A shared-host *root* (a directory/app-store/site-builder landing page)
+        # is skipped: it identifies no single product, and storing it here would
+        # let two unrelated records claim the same explicit identity.
         if not self.dedup.product_key:
-            key = product_identity_key(self.dedup.canonical_url or self.website)
-            if key:
-                self.dedup.product_key = key
+            identity = product_identity(self.dedup.canonical_url or self.website)
+            if identity and identity.identifies_a_product:
+                self.dedup.product_key = identity.key
         if self.rejection_reasons and not self.rejected:
             object.__setattr__(self, "rejected", True)
         object.__setattr__(self, "last_updated_at", datetime.now(timezone.utc))

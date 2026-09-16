@@ -56,7 +56,15 @@ scoring:
 dedup:
   name_similarity_threshold: 0.88
   review_similarity_threshold: 0.78
+  # Names alone NEVER merge. This floor only decides whether an uncertain pair
+  # is queued for human review (tier E) instead of being marked distinct.
+  review_name_floor: 0.82
   domain_match_is_authoritative: true
+  # Blocking caps keep deduplication sub-quadratic. Precise keys (exact product
+  # key / canonical URL / identity key) may hold more members than broad ones
+  # (name prefix, shared token, host), which only catch near-miss names.
+  max_block_size: 400
+  max_broad_block_size: 40
 
 batch:
   batch_number: 1

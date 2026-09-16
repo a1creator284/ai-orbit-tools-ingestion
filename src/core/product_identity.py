@@ -45,10 +45,42 @@ from src.core.urls import extract_domain, extract_registrable_domain, normalize_
 
 __all__ = [
     "GENERIC_PATH_SEGMENTS",
+    "SHARED_HOST_DOMAINS",
     "ProductIdentity",
     "product_identity",
     "product_identity_key",
 ]
+
+#: Registrable domains that host **many unrelated products**: app stores, site
+#: builders, code/model hosts and the AI directories we discover from. Their
+#: registrable domain is never a product identity; only a full product path on
+#: them can identify a product (``apps.apple.com/app/foo``), and their *root*
+#: identifies nothing at all.
+#:
+#: This is the single source of truth, consumed by :mod:`src.core.ids` (so a
+#: directory root can never become a deterministic official identity) and by
+#: :class:`src.core.config.DedupConfig` (whose ``ignore_domains`` defaults to
+#: it and may extend it per deployment).
+SHARED_HOST_DOMAINS = frozenset(
+    {
+        # code / model / notebook hosts
+        "github.com", "gitlab.com", "huggingface.co", "notion.so", "notion.site",
+        # site builders & PaaS preview domains
+        "vercel.app", "netlify.app", "streamlit.app", "gumroad.com", "carrd.co",
+        "framer.app", "framer.website", "webflow.io", "wixsite.com", "replit.app",
+        "glitch.me", "herokuapp.com", "pages.dev", "web.app", "firebaseapp.com",
+        "bubbleapps.io", "softr.app", "canva.site",
+        # app stores / extension stores
+        "apps.apple.com", "play.google.com", "chromewebstore.google.com",
+        "chrome.google.com", "microsoftedge.microsoft.com",
+        # launch platforms & AI directories used for discovery/cross-check
+        "producthunt.com", "theresanaiforthat.com", "creati.ai", "toolpilot.ai",
+        "futurepedia.io", "dang.ai", "opentools.ai", "topai.tools",
+        "poweredbyai.app", "aivalley.ai", "easywithai.com", "foundr.ai",
+        "rankmyai.com", "aipure.ai", "aitoolnet.com", "aichief.com",
+        "aixploria.com", "rundown.ai",
+    }
+)
 
 #: Path segments that address a *page of a product*, not a different product.
 GENERIC_PATH_SEGMENTS = frozenset(
@@ -101,6 +133,25 @@ class ProductIdentity:
     @property
     def slug(self) -> str | None:
         return self.path_segments[-1] if self.path_segments else None
+
+    @property
+    def is_shared_host(self) -> bool:
+        """True when this host serves many unrelated products.
+
+        See :data:`SHARED_HOST_DOMAINS`. A shared host's registrable domain is
+        never a product identity.
+        """
+        return self.registrable_domain in SHARED_HOST_DOMAINS
+
+    @property
+    def identifies_a_product(self) -> bool:
+        """True when this identity can stand for exactly one product.
+
+        A shared host **root** (``producthunt.com``) identifies nothing: every
+        product listed there would collapse into one identity. A product path
+        on a shared host (``apps.apple.com/app/foo``) does identify a product.
+        """
+        return not (self.is_shared_host and self.is_root)
 
     def shares_registrable_domain(self, other: "ProductIdentity") -> bool:
         return self.registrable_domain == other.registrable_domain

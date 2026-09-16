@@ -59,7 +59,24 @@ from src.core.product_identity import ProductIdentity, product_identity
 from src.core.text import canonical_name, name_tokens, similarity, token_set_ratio
 from src.models.tool import Tool
 
-__all__ = ["MatchDecision", "MatchTier", "MatchSignal", "MatchResult", "ToolMatcher"]
+__all__ = [
+    "BROAD_BLOCK_PREFIXES",
+    "MatchDecision",
+    "MatchTier",
+    "MatchSignal",
+    "MatchResult",
+    "ToolMatcher",
+]
+
+#: Blocking-key prefixes that are *recall helpers*, not identity claims.
+#:
+#: A ``product:``/``canonical:``/``identity:``/``repo:`` block groups records
+#: that already claim the same identity, so it is precise and small by nature.
+#: A ``prefix:``/``token:``/``host:``/``domain:`` block instead groups every
+#: record that merely *might* be related — for 1,000 candidates a single shared
+#: 6-character prefix would produce ~500,000 comparisons. Broad blocks are
+#: therefore capped much harder (see ``DedupConfig.max_broad_block_size``).
+BROAD_BLOCK_PREFIXES = ("prefix:", "token:", "host:", "domain:")
 
 
 class MatchDecision(str, Enum):
@@ -275,6 +292,17 @@ class ToolMatcher:
             keys.add(f"repo:{tool.repository_url.lower()}")
         return sorted(keys)
 
+    def block_limit(self, key: str) -> int:
+        """Max members to compare inside the block named ``key``.
+
+        Broad keys (name prefix, shared token, host, domain) get the small cap
+        so a generic token can never turn deduplication into a full pairwise
+        sweep; precise identity keys get the larger one.
+        """
+        if key.startswith(BROAD_BLOCK_PREFIXES):
+            return self.config.max_broad_block_size
+        return self.config.max_block_size
+
     # ------------------------------------------------------ tier evaluation
     @staticmethod
     def _merge(tier: MatchTier, evidence: str, reason: str) -> MatchResult:
@@ -292,14 +320,18 @@ class ToolMatcher:
         shared = self._canonical_urls(left) & self._canonical_urls(right)
         return min(shared) if shared else None
 
-    @staticmethod
-    def _canonical_urls(tool: Tool) -> set[str]:
+    def _canonical_urls(self, tool: Tool) -> set[str]:
         """Every URL that *asserts* this record's official product identity.
 
         Directory listing URLs are deliberately excluded: two directories
         listing the same product have different listing URLs, and one directory
         listing two products has two listing URLs under one host — so a listing
         URL is a provenance pointer, not a cross-source identity.
+
+        A URL that cannot identify a single product is also excluded: two
+        unrelated tools whose ``website`` was (wrongly) recorded as a directory
+        or app-store **root** must not merge on tier A just because the strings
+        are equal.
         """
         urls = {
             tool.dedup.canonical_url,
@@ -307,7 +339,14 @@ class ToolMatcher:
             tool.verification.final_url if tool.is_verified else None,
             tool.verification.official_url_checked if tool.is_verified else None,
         }
-        return {url for url in urls if url}
+        return {url for url in urls if url and self._identifies_a_product(url)}
+
+    def _identifies_a_product(self, url: str | None) -> bool:
+        """True when ``url`` can stand for exactly one product."""
+        identity = product_identity(url)
+        if identity is None:
+            return False
+        return not (identity.is_root and self._is_shared_host(identity.registrable_domain))
 
     def _explicit_identity_match(
         self,
@@ -332,8 +371,7 @@ class ToolMatcher:
         shared = left_keys & right_keys
         return min(shared) if shared else None
 
-    @staticmethod
-    def _explicit_keys(tool: Tool) -> set[str]:
+    def _explicit_keys(self, tool: Tool) -> set[str]:
         """Product keys explicitly asserted for this record (not merely observed)."""
         keys: set[str] = set()
         for url in (
@@ -341,7 +379,7 @@ class ToolMatcher:
             tool.verification.final_url if tool.is_verified else None,
         ):
             identity = product_identity(url)
-            if identity:
+            if identity and self._identifies_a_product(url):
                 keys.add(identity.key)
         basis = tool.dedup.identity_basis or ""
         if tool.dedup.identity_key and basis in {
@@ -533,7 +571,9 @@ class ToolMatcher:
             identity = product_identity(url)
             if identity is None:
                 continue
-            if self._is_shared_host(identity.registrable_domain) and identity.is_root:
+            # A shared-host *root* (a directory/app-store/site-builder landing
+            # page) identifies nothing; a product path on it does.
+            if identity.is_root and self._is_shared_host(identity.registrable_domain):
                 continue
             return identity
         return None
