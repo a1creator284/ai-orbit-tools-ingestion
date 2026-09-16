@@ -65,7 +65,10 @@ sources:
     enabled: true
     # Category listings provide breadth; ?page=N echoes page 1 on this site, so
     # the paginator's repeated-content guard stops numeric walks by design.
-    max_categories: 8
+    # The live main listing enumerates ~249 category slugs (verified
+    # 2026-09-16); walking a large share of them is the only way this source
+    # produces breadth, since its single "all tools" page is capped.
+    max_categories: 160
     notes: >
       Primary discovery source. Two card layouts are handled: the grid cards on
       /ai-tools/ and the list cards on /ai-tools/categories/<slug>/. Visible
@@ -163,10 +166,23 @@ sources:
   - key: aitoolnet
     name: AIToolNet
     homepage: https://www.aitoolnet.com/
+    listing_url: https://www.aitoolnet.com/new
     tier: 2
     roles: [discovery, cross_check]
+    access: html
     trust: 0.45
-    enabled: false
+    rate_limit_rps: 0.3
+    enabled: true
+    max_pages: 1
+    notes: >
+      Enabled 2026-09-16 as the breadth complement to Creati.ai. Chosen over the
+      other accessible tier-2 directories because it is the only one that
+      publishes the OUTBOUND official product URL directly in the listing card,
+      which is what official-website verification (§10) needs. Verified
+      behaviour: the homepage and /new render server-side; category pages fill
+      client-side and yield nothing to an HTTP client; ?page=2 returns 404. The
+      adapter therefore walks only the two server-rendered surfaces and never
+      attempts numeric pagination.
 
   - key: aichief
     name: AIChief
