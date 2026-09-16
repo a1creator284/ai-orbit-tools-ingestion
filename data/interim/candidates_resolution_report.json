@@ -1,31 +1,36 @@
 {
   "input_path": "/home/user/webapp/data/raw/candidates.jsonl",
   "output_path": "/home/user/webapp/data/interim/candidates_resolved.jsonl",
-  "generated_at": "2026-09-16T20:21:12.573690+00:00",
+  "generated_at": "2026-09-16T20:40:20.996720+00:00",
   "live": true,
+  "complete": false,
+  "scope_sources": null,
   "input_records": 3957,
   "input_unreadable_lines": 0,
-  "output_records": 2200,
-  "pending": 1710,
+  "output_records": 2266,
+  "pending": 1680,
+  "pending_scope": "whole feed",
   "already_had_official_url": 2192,
-  "needed_resolution": 8,
-  "attempted": 8,
-  "resolved": 8,
-  "unresolved": 0,
+  "needed_resolution": 74,
+  "attempted": 74,
+  "resolved": 69,
+  "unresolved": 5,
   "skipped_no_detail_url": 0,
   "fetch_failures": 0,
   "http_errors": 0,
   "bot_challenges": 0,
   "parse_failures": 0,
   "identity_mismatches": 0,
-  "no_outbound_url": 0,
+  "no_outbound_url": 5,
   "needs_review": 0,
-  "resolution_rate_of_attempted": 1.0,
-  "resolution_rate_of_missing_official_url": 1.0,
-  "failures": {},
+  "resolution_rate_of_attempted": 0.9324,
+  "resolution_rate_of_missing_official_url": 0.9324,
+  "failures": {
+    "only_shared_hosts": 5
+  },
   "evidence_types": {
-    "json_ld_software_url": 3,
-    "outbound_visit_link": 5
+    "json_ld_software_url": 33,
+    "outbound_visit_link": 36
   },
   "by_source": {
     "aitoolnet": {
@@ -39,19 +44,19 @@
     },
     "creati": {
       "already_had_official_url": 2144,
-      "attempted": 5,
-      "needed_resolution": 5,
-      "records": 2149,
-      "resolved": 5,
+      "attempted": 41,
+      "needed_resolution": 41,
+      "records": 2185,
+      "resolved": 36,
       "skipped_no_detail_url": 0,
-      "unresolved": 0
+      "unresolved": 5
     },
     "dang": {
       "already_had_official_url": 0,
-      "attempted": 3,
-      "needed_resolution": 3,
-      "records": 3,
-      "resolved": 3,
+      "attempted": 33,
+      "needed_resolution": 33,
+      "records": 33,
+      "resolved": 33,
       "skipped_no_detail_url": 0,
       "unresolved": 0
     }

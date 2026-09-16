@@ -530,6 +530,139 @@ def test_report_is_json_serialisable(tmp_path: Path) -> None:
     assert on_disk["output_records"] == 1
 
 
+# --------------------------------------------------------------------------- #
+# checkpoint/report consistency
+#
+# Regression cover for the f42c8b7 production checkpoint, where the resolved
+# dataset held 2,266 rows while the published report said 2,200. Nothing was
+# wrong with the data; the report was simply the one written by the previous
+# finished pass, because a report was only ever emitted at the *end* of a run
+# and the third (live) pass was interrupted after 66 further rows.
+# --------------------------------------------------------------------------- #
+def test_interrupted_pass_still_leaves_a_report_matching_the_rows_on_disk(
+    tmp_path: Path,
+) -> None:
+    """An interrupted pass must not leave the previous pass's report behind.
+
+    The runner is stopped mid-pass exactly the way a killed production batch
+    stops: the client raises once a number of detail pages have been read. The
+    report on disk then has to describe the rows that were actually appended.
+    """
+    records = [raw(f"Tool {i}", listing_url=DANG_URL) for i in range(6)]
+    feed = write_feed(tmp_path / "raw" / "candidates.jsonl", records)
+    interim = tmp_path / "interim"
+
+    class DyingClient(FakeHttpClient):
+        def try_fetch(self, url: str, **kwargs: object):  # type: ignore[override]
+            if len(self.calls) >= 4:
+                raise KeyboardInterrupt("production batch killed")
+            return super().try_fetch(url, **kwargs)
+
+    client = DyingClient(responses={DANG_URL: load_fixture("dang_detail_axiom.html")})
+    runner = OfficialUrlResolutionRunner(client=client, live=True, checkpoint_every=2)
+    with pytest.raises(KeyboardInterrupt):
+        runner.run(feed, interim_dir=interim)
+
+    rows = read_output(interim)
+    on_disk = json.loads((interim / RESOLUTION_REPORT_FILENAME).read_text(encoding="utf-8"))
+    # The report describes the persisted file, not the pass that finished last.
+    assert on_disk["output_records"] == len(rows) == 4
+    # And it says out loud that the pass did not finish.
+    assert on_disk["complete"] is False
+
+
+def test_checkpoint_report_is_rewritten_during_the_pass(tmp_path: Path) -> None:
+    """The report is refreshed at checkpoints, not only when a pass ends."""
+    records = [raw(f"Tool {i}", listing_url=DANG_URL) for i in range(4)]
+    feed = write_feed(tmp_path / "raw" / "candidates.jsonl", records)
+    interim = tmp_path / "interim"
+    seen: list[int] = []
+
+    class WatchingClient(FakeHttpClient):
+        def try_fetch(self, url: str, **kwargs: object):  # type: ignore[override]
+            report_path = interim / RESOLUTION_REPORT_FILENAME
+            if report_path.exists():
+                seen.append(
+                    json.loads(report_path.read_text(encoding="utf-8"))["output_records"]
+                )
+            return super().try_fetch(url, **kwargs)
+
+    client = WatchingClient(responses={DANG_URL: load_fixture("dang_detail_axiom.html")})
+    OfficialUrlResolutionRunner(client=client, live=True, checkpoint_every=2).run(
+        feed, interim_dir=interim
+    )
+    # A report existed mid-pass and already counted the rows written by then.
+    assert seen == [2, 2]
+
+
+def test_completed_pass_reports_complete(tmp_path: Path) -> None:
+    _, report, interim = run_stage(
+        tmp_path, [raw("Axiom AI Work Assistant", listing_url=DANG_URL)]
+    )
+    assert report.complete is True
+    on_disk = json.loads((interim / RESOLUTION_REPORT_FILENAME).read_text(encoding="utf-8"))
+    assert on_disk["complete"] is True
+
+
+def test_source_filtered_pass_reports_its_pending_scope(tmp_path: Path) -> None:
+    """``pending`` is scoped to ``--source``, and the report says so.
+
+    This is the second half of the f42c8b7 puzzle: a ``--source dang`` pass
+    reported ``pending: 1710`` (the outstanding Dang.ai rows) which does not
+    equal ``input_records - output_records`` across the whole feed. That is
+    correct behaviour, so the scope has to be published with the number.
+    """
+    records = [
+        raw("Axiom AI Work Assistant", listing_url=DANG_URL),
+        raw("BonBon AI", listing_url=DANG_BONBON_URL),
+        raw("Quantinor", source_key="creati", listing_url=CREATI_URL),
+    ]
+    _, report, interim = run_stage(tmp_path, records, sources={"dang"}, limit=1)
+
+    # One Dang row written, one Dang row still pending; the Creati row is out
+    # of scope and is therefore not counted as pending.
+    assert report.output_records == 1
+    assert report.pending == 1
+    assert report.scope_sources == ["dang"]
+    on_disk = json.loads((interim / RESOLUTION_REPORT_FILENAME).read_text(encoding="utf-8"))
+    assert on_disk["pending_scope"] == "sources: dang"
+
+
+def test_unscoped_pass_reports_the_whole_feed_as_its_scope(tmp_path: Path) -> None:
+    _, report, interim = run_stage(
+        tmp_path, [raw("Axiom AI Work Assistant", listing_url=DANG_URL)]
+    )
+    assert report.scope_sources is None
+    on_disk = json.loads((interim / RESOLUTION_REPORT_FILENAME).read_text(encoding="utf-8"))
+    assert on_disk["pending_scope"] == "whole feed"
+
+
+def test_duplicate_raw_lines_make_output_records_smaller_than_input(
+    tmp_path: Path,
+) -> None:
+    """One candidate spread over several raw lines collapses to one row.
+
+    The production feed has 3,957 lines but only 3,946 distinct candidates, so
+    ``output_records`` is legitimately below ``input_records`` even on a
+    complete pass. The later line's website must win over the earlier blank
+    one rather than the candidate being persisted twice.
+    """
+    first = raw("Quantinor", source_key="creati", listing_url=CREATI_URL)
+    second = raw(
+        "Quantinor",
+        source_key="creati",
+        listing_url=CREATI_URL,
+        website="https://quantinor.example/",
+    )
+    out, report, _ = run_stage(tmp_path, [first, second])
+
+    assert report.input_records == 2
+    assert report.output_records == 1
+    assert report.pending == 0
+    assert len(out) == 1
+    assert out[0]["website"]
+
+
 def test_offline_runner_makes_no_network_call_and_resolves_nothing(tmp_path: Path) -> None:
     feed = write_feed(
         tmp_path / "raw" / "candidates.jsonl", [raw("Axiom", listing_url=DANG_URL)]

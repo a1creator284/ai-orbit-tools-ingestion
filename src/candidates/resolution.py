@@ -28,7 +28,14 @@ module's only job:
   are already there, and appends only the rest;
 * **the report is derived from the persisted dataset**, not from in-memory
   counters, so the published statistics can never disagree with the file they
-  describe — and cannot be fabricated.
+  describe — and cannot be fabricated. It is rewritten at every checkpoint,
+  not only when a pass finishes, so an *interrupted* pass also leaves a report
+  that matches the rows on disk (``complete: false`` marks it as mid-pass).
+* **``pending`` is scoped.** With ``--source`` the pass only considers that
+  directory, so ``pending`` counts what is outstanding *within that scope* and
+  the report names the scope in ``scope_sources`` / ``pending_scope``. It is
+  deliberately not ``input_records - output_records``: the raw feed can contain
+  several lines for one candidate, and those collapse to a single output row.
 
 Hard rules
 ----------
@@ -348,6 +355,14 @@ class ResolutionRunReport:
     bases: dict[str, int] = field(default_factory=dict)
     by_source: dict[str, dict[str, int]] = field(default_factory=dict)
     pending: int = 0
+    #: ``None`` when the pass covered the whole feed, otherwise the sorted
+    #: ``--source`` keys it was restricted to. ``pending`` is counted *within
+    #: this scope*, so without it a source-filtered report's ``pending`` looks
+    #: inconsistent with ``input_records - output_records``.
+    scope_sources: list[str] | None = None
+    #: False while a pass is still running (the report is refreshed at every
+    #: checkpoint so an interrupted pass still describes the file on disk).
+    complete: bool = False
 
     @property
     def resolution_rate(self) -> float | None:
@@ -369,10 +384,17 @@ class ResolutionRunReport:
             "output_path": self.output_path,
             "generated_at": self.generated_at,
             "live": self.live,
+            "complete": self.complete,
+            "scope_sources": list(self.scope_sources) if self.scope_sources else None,
             "input_records": self.input_records,
             "input_unreadable_lines": self.input_unreadable_lines,
             "output_records": self.output_records,
             "pending": self.pending,
+            "pending_scope": (
+                "whole feed"
+                if not self.scope_sources
+                else "sources: " + ", ".join(self.scope_sources)
+            ),
             "already_had_official_url": self.already_had_official_url,
             "needed_resolution": self.needed_resolution,
             "attempted": self.attempted,
@@ -633,6 +655,21 @@ class OfficialUrlResolutionRunner:
             written += 1
 
             if written % self.checkpoint_every == 0:
+                # The report is refreshed together with the state, not only at
+                # the end of the pass: an interrupted run must still leave a
+                # report that describes the rows actually on disk. Counting is
+                # a cheap linear read of the output file, so doing it per
+                # checkpoint costs far less than publishing a stale report.
+                report = self._build_report(
+                    output_path,
+                    input_path=input_path,
+                    input_records=input_records,
+                    unreadable=unreadable,
+                    pending=len(in_scope_keys - done - seen_keys),
+                    sources=sources,
+                    complete=False,
+                )
+                write_json(interim / RESOLUTION_REPORT_FILENAME, report.to_dict())
                 self._write_state(
                     state_path,
                     input_path=input_path,
@@ -642,22 +679,25 @@ class OfficialUrlResolutionRunner:
                     fetches=fetches,
                     resumed_from=len(done),
                     finished=False,
+                    report=report,
                 )
                 logger.info(
                     "resolution checkpoint",
                     extra={"written": written, "fetched": fetches},
                 )
 
-        report = summarize_resolved_file(output_path)
-        report.input_path = str(input_path)
-        report.input_records = input_records
-        report.input_unreadable_lines = unreadable
-        report.live = self.live
-        report.generated_at = _now()
         # Pending is measured against the input, not inferred from a count
         # difference: exactly the in-scope candidates that are neither already
         # persisted nor written by this pass.
-        report.pending = len(in_scope_keys - done - seen_keys)
+        report = self._build_report(
+            output_path,
+            input_path=input_path,
+            input_records=input_records,
+            unreadable=unreadable,
+            pending=len(in_scope_keys - done - seen_keys),
+            sources=sources,
+            complete=True,
+        )
         write_json(interim / RESOLUTION_REPORT_FILENAME, report.to_dict())
         self._write_state(
             state_path,
@@ -673,6 +713,33 @@ class OfficialUrlResolutionRunner:
         return report
 
     # --------------------------------------------------------------- helpers
+    def _build_report(
+        self,
+        output_path: Path,
+        *,
+        input_path: Path,
+        input_records: int,
+        unreadable: int,
+        pending: int,
+        sources: set[str] | None,
+        complete: bool,
+    ) -> ResolutionRunReport:
+        """Recompute the report from the persisted dataset and stamp the pass.
+
+        Single place where a report is produced, so a checkpoint report and a
+        final report cannot describe the same file differently.
+        """
+        report = summarize_resolved_file(output_path)
+        report.input_path = str(input_path)
+        report.input_records = input_records
+        report.input_unreadable_lines = unreadable
+        report.live = self.live
+        report.generated_at = _now()
+        report.pending = pending
+        report.scope_sources = sorted(sources) if sources else None
+        report.complete = complete
+        return report
+
     @staticmethod
     def _iter_input(path: Path) -> Iterator[Any]:
         """Stream raw records in file order (deterministic, malformed skipped)."""
