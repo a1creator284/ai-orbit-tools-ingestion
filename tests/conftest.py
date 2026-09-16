@@ -91,6 +91,20 @@ def creati_config() -> SourceConfig:
 
 
 @pytest.fixture
+def dang_config() -> SourceConfig:
+    return SourceConfig(
+        key="dang",
+        name="Dang.ai",
+        homepage="https://dang.ai/",
+        listing_url="https://dang.ai/",
+        tier=2,
+        roles=["discovery", "cross_check"],
+        trust=0.5,
+        enabled=True,
+    )
+
+
+@pytest.fixture
 def taaft_config() -> SourceConfig:
     return SourceConfig(
         key="taaft",

@@ -15,10 +15,23 @@ own:
 
 Dang.ai was picked next, from the approved tier-2 list, because it is the only
 accessible directory verified to offer **deep, genuinely-different numeric
-pagination**: ``/?page=N`` returns a fresh set of ~63 tool cards per page well
-past page 40 (verified 2026-09-16), against a self-declared catalogue of
-5000+ tools. That makes it the single highest-yield approved surface available
-to an HTTP client, and its pages are server-rendered, so no browser is needed.
+pagination**: ``/?page=N`` returns a fresh set of tool cards per page well past
+page 200 (re-verified 2026-09-16), against a self-declared catalogue of 5000+
+tools. That makes it the single highest-yield approved surface available to an
+HTTP client, and its pages are server-rendered, so no browser is needed.
+
+Pagination yield, measured on the live site rather than assumed
+---------------------------------------------------------------
+Pages 1, 2, 5, 20, 40, 60 and 200 each render **24-29 ``<article>`` cards with
+zero slug overlap between them**, so every page is genuine new inventory. Page
+500 is past the end: it returns HTTP 200 with **zero** cards, which the shared
+paginator already treats as ``empty_page`` and stops on — no special-casing is
+needed here, and an out-of-range page can never synthesise candidates.
+
+Note the listing page also carries ``/tool/`` links *outside* the cards (the
+sidebar "related"/nav blocks). Those are navigation, not listing inventory, so
+only ``<article>`` descendants are parsed; scraping every ``/tool/`` anchor
+would inflate counts with the same handful of promoted products per page.
 
 Observed behaviour that shapes this adapter (verified 2026-09-16)
 ------------------------------------------------------------------
@@ -33,12 +46,15 @@ Observed behaviour that shapes this adapter (verified 2026-09-16)
   detail URL is still fully usable;
 * ``robots.txt`` allows ``/`` and the listing paths (``/login``, ``/dashboard``,
   ``/account``, ``/submit``, ``/api`` are disallowed and are never requested);
-* ``/category/<slug>`` pages exist and paginate the same way, giving a second
-  breadth axis without re-walking the global list.
+* ``/categories`` enumerates **103** ``/category/<slug>`` pages (verified
+  2026-09-16), and those paginate the same way, giving a second breadth axis
+  without re-walking the global list.
 
 As with every directory adapter, presence here is **not** evidence of quality,
 activity or adoption. Only values literally on the page are captured; the
-upvote counter is stored as a raw, unverified observation.
+upvote counter is stored as a raw, unverified observation, and the "Pro
+featured on Dang" badge is recorded as *paid placement* so a later stage can
+discount it rather than read it as organic prominence.
 """
 
 from __future__ import annotations
@@ -72,9 +88,10 @@ EXCLUDED_PATHS = frozenset(
     {"login", "dashboard", "account", "submit", "api", "pricing", "about", "deals"}
 )
 
-_COUNTER_RE = re.compile(r"^\d[\d,]*$")
-#: ``aria-label="Upvote 8"`` on the card's vote button.
+#: ``aria-label="Upvote 8"`` / ``title="Upvote 8"`` on the card's vote button.
 _UPVOTE_RE = re.compile(r"upvote\s+([\d,]+)", re.IGNORECASE)
+#: ``aria-label="Pro featured on Dang"`` on the card's badge.
+_FEATURED_RE = re.compile(r"featured", re.IGNORECASE)
 
 
 @register_source("dang")
@@ -117,12 +134,16 @@ class DangSource(HtmlListingSource):
         if not include_categories:
             return plans
 
-        slugs = list(category_slugs or [])
-        if not slugs:
-            slugs = self.discover_category_slugs(f"{homepage}/categories")
         cap = max_categories if max_categories is not None else int(
             self.config.extra.get("max_categories", 0) or 0
         )
+        if cap <= 0:
+            # Nothing would be walked, so do not spend a request enumerating.
+            return plans
+
+        slugs = list(category_slugs or [])
+        if not slugs:
+            slugs = self.discover_category_slugs(f"{homepage}/categories")
         for slug in slugs[:cap]:
             plans.append(
                 ListingPlan(
@@ -238,21 +259,36 @@ class DangSource(HtmlListingSource):
 
     @staticmethod
     def _card_signals(card: Tag) -> dict[str, Any]:
-        """Raw, *unverified* observations visible on the card."""
+        """Raw, *unverified* observations visible on the card.
+
+        Only *labelled* values are captured. There is deliberately **no**
+        "first number on the card" fallback: verified against live markup
+        (2026-09-16) the cards carry other bare integers — e.g. the
+        ``Adult content`` badge renders the literal text ``18`` — so such a
+        fallback silently files a content rating as an upvote count. A missing
+        counter must stay missing (guideline: never fabricate a field).
+        """
         signals: dict[str, Any] = {}
-        button = card.select_one("button[aria-label]")
-        if button is not None:
-            match = _UPVOTE_RE.search(str(button.get("aria-label") or ""))
-            if match:
-                signals["directory_upvotes_raw"] = match.group(1)
-        badge = card.select_one("[title*='featured'], [aria-label*='featured']")
-        if badge is not None:
-            signals["directory_featured_placement"] = True
-        if "directory_upvotes_raw" not in signals:
-            for node in card.select("button span, span"):
-                value = node_text(node)
-                if value and _COUNTER_RE.match(value):
-                    signals["directory_upvotes_raw"] = value
+
+        for button in card.find_all("button"):
+            for attr in ("aria-label", "title"):
+                match = _UPVOTE_RE.search(str(button.get(attr) or ""))
+                if match:
+                    signals["directory_upvotes_raw"] = match.group(1)
+                    break
+            if "directory_upvotes_raw" in signals:
+                break
+
+        # Paid placement, not a quality signal — recorded so downstream stages
+        # can *discount* it rather than mistake it for organic prominence.
+        for node in card.find_all(attrs={"title": True}):
+            if _FEATURED_RE.search(str(node.get("title") or "")):
+                signals["directory_featured_placement"] = True
+                break
+        if "directory_featured_placement" not in signals:
+            for node in card.find_all(attrs={"aria-label": True}):
+                if _FEATURED_RE.search(str(node.get("aria-label") or "")):
+                    signals["directory_featured_placement"] = True
                     break
         return signals
 

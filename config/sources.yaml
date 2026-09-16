@@ -94,10 +94,29 @@ sources:
   - key: dang
     name: Dang.ai
     homepage: https://dang.ai/
+    listing_url: https://dang.ai/
     tier: 2
     roles: [discovery, cross_check]
+    access: html
     trust: 0.5
-    enabled: false
+    rate_limit_rps: 0.3
+    enabled: true
+    max_pages: 10
+    max_categories: 0
+    notes: >
+      Enabled 2026-09-16 as the deep-pagination breadth source. Unlike Creati.ai
+      (bounded category pages) and AIToolNet (?page=2 is a 404), /?page=N here
+      returns genuinely different inventory: pages 1, 2, 5, 20, 40, 60 and 200
+      were each fetched and share ZERO tool slugs. Page 500 is past the end and
+      renders zero cards, so the paginator's empty_page guard terminates the
+      walk naturally. ACCESS CAVEAT: the listing card does NOT publish the
+      outbound official URL — that lives on the /tool/<slug> detail page — so
+      candidates carry the Dang detail URL as their pointer and website stays
+      None rather than being guessed from the slug. Official-URL resolution is
+      a later stage's job. robots.txt allows / and disallows
+      /login /dashboard /account /submit /api, none of which are requested.
+      max_categories defaults to 0: the global list is the productive surface,
+      and category walks would mostly re-yield the same products.
 
   - key: opentools
     name: OpenTools.ai

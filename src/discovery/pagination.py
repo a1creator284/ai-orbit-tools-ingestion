@@ -8,7 +8,10 @@ forever, so every guard lives here rather than in the individual adapters:
 * **content fingerprinting** — several directories silently return page 1 for
   an unsupported ``?page=N``; a repeated fingerprint stops the walk instead of
   producing thousands of duplicate candidates;
-* an empty page (no items parsed) stops the walk;
+* an empty page (no items parsed) stops the walk — enforced by the caller via
+  :data:`STOP_EMPTY_PAGE`, because only the adapter knows what an "item" looks
+  like; several directories answer an out-of-range ``?page=N`` with HTTP 200
+  and an empty result list rather than a 404, so status alone cannot detect it;
 * consecutive-failure budget so a flaky/rate-limited host stops the walk
   instead of being hammered;
 * bot-challenge detection: a blocked page ends the walk cleanly with a reason.

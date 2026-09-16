@@ -31,7 +31,12 @@ from src.core.http_client import HttpClient
 from src.core.urls import normalize_url
 from src.discovery.base import CandidateTool, DiscoverySource, SourceConfig
 from src.discovery.identity import candidate_key
-from src.discovery.pagination import PageResult, Paginator, PageWalkStats
+from src.discovery.pagination import (
+    STOP_EMPTY_PAGE,
+    PageResult,
+    Paginator,
+    PageWalkStats,
+)
 from src.extraction.html import (
     anchor_targets,
     is_asset_url,
@@ -253,10 +258,19 @@ class HtmlListingSource(DiscoverySource):
                 for page in paginator.walk(plan.url_for_page, stats=walk_stats):
                     cards = self.find_cards(page)
                     if not cards:
+                        # End of the catalogue. Several directories answer an
+                        # out-of-range ``?page=N`` with HTTP 200 and an empty
+                        # results list rather than a 404 (verified on dang.ai:
+                        # page 500 is 200 with zero cards), so status alone
+                        # cannot end the walk. Only the adapter knows what a
+                        # card looks like, which is why this guard lives here
+                        # rather than in the paginator.
                         self.logger.info(
-                            "no cards parsed on listing page",
+                            "no cards parsed on listing page; ending walk",
                             extra={"source": self.key, "url": page.url},
                         )
+                        walk_stats.stop_reason = STOP_EMPTY_PAGE
+                        break
                     for card in cards:
                         self.stats.cards_seen += 1
                         try:
