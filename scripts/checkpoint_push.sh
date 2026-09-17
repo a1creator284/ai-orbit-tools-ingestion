@@ -51,9 +51,16 @@ stranded in the sandbox. Input candidates_resolved.jsonl is untouched
 and no verifier rule or threshold was changed."
 
   # Integrate any newer remote production checkpoint before pushing.
-  # Rebase keeps remote history intact; we never reset, clean or force.
+  #
+  # The test is *ancestry*, not a tree diff: right after our own commit the
+  # trees of HEAD and origin/main always differ, so a tree diff would trigger
+  # a pointless rebase on every single checkpoint. Ancestry answers the only
+  # question that matters — did the remote gain a commit we do not have?
+  # If origin/main is already an ancestor of HEAD, a plain fast-forward push
+  # is safe. Rebase keeps remote history intact; we never reset, clean or
+  # force-push, so a newer remote checkpoint can never be discarded.
   git fetch -q origin 2>/dev/null
-  if ! git diff --quiet HEAD origin/main -- 2>/dev/null; then
+  if ! git merge-base --is-ancestor origin/main HEAD 2>/dev/null; then
     if ! git pull -q --rebase origin main 2>/dev/null; then
       echo "$(date -u +%FT%TZ) rebase needed manual attention at ${count}"
       git rebase --abort 2>/dev/null
