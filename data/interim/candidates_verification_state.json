@@ -1,17 +1,17 @@
 {
   "version": 1,
-  "updated_at": "2026-09-17T04:03:01.344942+00:00",
+  "updated_at": "2026-09-17T04:44:20.241993+00:00",
   "input_source": "/home/user/webapp/data/interim/candidates_resolved.jsonl",
   "input_source_kind": "resolved",
   "input_candidates": 3441,
   "output_path": "/home/user/webapp/data/interim/candidates_verified.jsonl",
-  "records_persisted": 2075,
+  "records_persisted": 2126,
   "pending": null,
   "status_counts": {
-    "partially_verified": 219,
-    "unreachable": 385,
-    "unverified": 496,
-    "verified": 975
+    "partially_verified": 224,
+    "unreachable": 400,
+    "unverified": 508,
+    "verified": 994
   },
   "batches": [
     {
@@ -20,6 +20,14 @@
       "live": true,
       "resumed_from_records": 50,
       "records_written": 2025,
+      "finished": false
+    },
+    {
+      "started_at": "2026-09-17T04:38:23.990126+00:00",
+      "updated_at": "2026-09-17T04:44:20.241974+00:00",
+      "live": true,
+      "resumed_from_records": 2076,
+      "records_written": 50,
       "finished": false
     }
   ]
