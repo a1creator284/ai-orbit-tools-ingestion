@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Sequence
 
 from src.candidates.prepare import CandidatePreparer, PreparedCandidate
+from src.candidates.promotion import PromotionReport, load_verified_rows, promote_verified_rows
 from src.candidates.store import load_discovery_dir
 from src.cleaning.normalizer import ToolNormalizer
 from src.core.config import Settings, get_settings
@@ -696,6 +697,71 @@ class ToolsPipeline:
         stats.finished_at = _now()
         return selected, not_selected
 
+    def run_from_persisted_verification(
+        self,
+        *,
+        verified_path: str | Path | None = None,
+        resolved_path: str | Path | None = None,
+        persist: bool = True,
+    ) -> tuple[RunReport, PromotionReport]:
+        """Finish the pipeline from saved live-verification evidence only.
+
+        This offline replay never calls discovery, resolution, or official-site
+        verification. It reuses the completed evidence, then runs normal
+        filtering, deterministic deduplication/scoring, validation, and
+        selection. Facts remain blank because the verifier did not persist page
+        markup; this method never re-fetches it or invents a substitute.
+        """
+        self.settings.paths.ensure()
+        interim = self.settings.paths.resolve("interim")
+        verified = Path(verified_path or interim / "candidates_verified.jsonl")
+        resolved = Path(resolved_path or interim / "candidates_resolved.jsonl")
+        rows = load_verified_rows(verified)
+        tools, promotion = promote_verified_rows(rows, resolved_path=resolved)
+
+        stage = self.report.stage("verify_candidates")
+        stage.started_at = _now()
+        stage.input_count, stage.output_count = len(rows), len(tools)
+        stage.dropped_count = promotion.dropped_unidentifiable + promotion.offline_rows_skipped
+        stage.error_count = promotion.errors
+        stage.details = {"mode": "persisted_evidence_replay", **promotion.to_dict()}
+        stage.finished_at = _now()
+        stage = self.report.stage("normalization")
+        stage.started_at = _now()
+        stage.input_count, stage.output_count = len(rows), len(tools)
+        stage.dropped_count = promotion.dropped_unidentifiable
+        stage.finished_at = _now()
+        stage = self.report.stage("verification")
+        stage.started_at = _now()
+        stage.input_count = stage.output_count = len(tools)
+        stage.details = {"mode": "persisted_evidence_replay", "network_calls": 0,
+                         "official_facts_extracted": 0,
+                         "note": "official page markup was not persisted"}
+        stage.finished_at = _now()
+
+        quality_kept = self.filter_quality(tools)
+        verification_rejected = [tool for tool in tools if tool not in quality_kept]
+        scored = self.score(self.deduplicate(quality_kept))
+        above_threshold, _decisions, _filter_report = self.apply_thresholds(scored)
+        enriched = self.enrich(above_threshold)
+        publishable, validation_results = self.validate(enriched)
+        selected, not_selected = self.select(publishable)
+        edges = self.map_relationships(selected)
+        kept_ids = {id(tool) for tool in above_threshold}
+        dropped_by_threshold = [tool for tool in scored if id(tool) not in kept_ids]
+        validation_rejected = [tool for tool in enriched if tool not in publishable]
+        rejected = [*verification_rejected, *dropped_by_threshold, *validation_rejected, *not_selected]
+        self.report.selected_count = len(selected)
+        self.report.rejected_count = len(rejected)
+        self.report.review_count = sum(1 for tool in selected if tool.needs_human_review)
+        self.report.finished_at = _now()
+        if persist:
+            self._persist(None, [*verification_rejected, *scored], selected, rejected, edges, validation_results)
+            promotion_path = write_json(interim / "promotion_report.json", promotion.to_dict())
+            self.report.artefacts["promotion_report"] = str(promotion_path)
+            write_json(self.settings.paths.resolve("final") / "run_report.json", self.report.to_dict())
+        return self.report, promotion
+
     # ==========================================================  full run
     def run(
         self,
@@ -788,7 +854,7 @@ class ToolsPipeline:
     # ------------------------------------------------------------ persistence
     def _persist(
         self,
-        candidates: Sequence[CandidateTool],
+        candidates: Sequence[CandidateTool] | None,
         normalized: Sequence[Tool],
         selected: Sequence[Tool],
         not_selected: Sequence[Tool],
@@ -797,9 +863,6 @@ class ToolsPipeline:
     ) -> None:
         paths = self.settings.paths
         artefacts: dict[str, Path] = {
-            "raw_candidates": write_jsonl(
-                paths.resolve("raw") / "candidates.jsonl", [c.to_dict() for c in candidates]
-            ),
             "processed_tools": write_jsonl(
                 paths.resolve("processed") / "tools.jsonl",
                 [t.to_dict() for t in normalized],
@@ -862,6 +925,10 @@ class ToolsPipeline:
                 paths.resolve("final") / "run_report.json", self.report.to_dict()
             ),
         }
+        if candidates is not None:
+            artefacts["raw_candidates"] = write_jsonl(
+                paths.resolve("raw") / "candidates.jsonl", [c.to_dict() for c in candidates]
+            )
         # ``update``, not assignment: earlier stages (candidate verification)
         # already registered their interim artefacts and must not be dropped.
         self.report.artefacts.update(

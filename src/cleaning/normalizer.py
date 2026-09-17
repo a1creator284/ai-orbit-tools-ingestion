@@ -287,6 +287,7 @@ class ToolNormalizer:
             discovery_sources=sources,
             source=sources[0] if sources else None,
             adoption=self._normalize_adoption(raw),
+            directory_evidence=dict(raw.get("directory_evidence") or {}),
             dedup=DedupInfo(
                 identity_key=identity.value,
                 identity_basis=identity.basis,

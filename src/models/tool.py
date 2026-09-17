@@ -379,6 +379,10 @@ class Tool(BaseEntity):
     limitations: list[str] = Field(default_factory=list)
     aiorbit_summary: str | None = Field(None, description="AI Orbit verdict / editorial summary")
     adoption: AdoptionSignals = Field(default_factory=AdoptionSignals)
+    #: Literal counters/ratings observed on a discovery directory. These stay
+    #: separate from official product facts; only explicitly understood
+    #: counters may additionally be mapped to ``adoption`` during promotion.
+    directory_evidence: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
     last_verified_date: date | None = None
     discovery_sources: list[SourceRef] = Field(
         default_factory=list, description="Every directory/listing the tool was discovered in"

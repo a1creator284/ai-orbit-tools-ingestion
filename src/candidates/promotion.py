@@ -144,17 +144,60 @@ def _descriptive_payload(prepared: Any) -> dict[str, Any]:
     """Discovery-side descriptive fields, copied verbatim (still claims)."""
     if prepared is None:
         return {}
+    signals = dict(getattr(prepared, "raw_signals", None) or {})
+    sources = _source_refs(getattr(prepared, "discovery_sources", None) or [])
+    source_payload = [source.model_dump(mode="json") for source in sources]
+    directory_evidence: dict[str, list[dict[str, Any]]] = {}
+    for key, value in signals.items():
+        signal_name = str(key).casefold()
+        # This intentionally narrow allow-list ensures arbitrary raw numbers
+        # never become adoption evidence merely because they are numeric.
+        if not any(token in signal_name for token in (
+            "directory_upvote", "directory_like_counter", "directory_rating",
+        )):
+            continue
+        directory_evidence[str(key)] = [{"value": value, "sources": source_payload}]
     return {
         "short_description": getattr(prepared, "observed_description", None),
         "categories": list(getattr(prepared, "categories", None) or []),
-        "raw_signals": dict(getattr(prepared, "raw_signals", None) or {}),
+        "raw_signals": signals,
+        "directory_evidence": directory_evidence,
     }
+
+
+def _directory_upvotes(tool: Tool, raw_signals: Mapping[str, Any]) -> None:
+    """Map literal directory *upvote* observations with source provenance.
+
+    Like counters and star visuals remain in ``directory_evidence``: the
+    schema/rubric has no equivalent metric for either. A value enters adoption
+    only when its explicit field name says ``upvotes`` and it is a non-negative
+    integer.
+    """
+    values: list[int] = []
+    for key, value in raw_signals.items():
+        name = str(key).casefold()
+        # Adapters retain both a canonical and namespaced copy. Accepting only
+        # the canonical key avoids counting one observation twice.
+        if not name.startswith("directory_upvotes"):
+            continue
+        text = str(value).strip().replace(",", "")
+        if text.isdigit():
+            values.append(int(text))
+    if not values:
+        return
+    tool.adoption.directory_upvotes = max(values)
+    tool.adoption.signal_sources = list(tool.discovery_sources)
+    if tool.discovery_sources and tool.discovery_sources[0].retrieved_at:
+        tool.adoption.observed_at = tool.discovery_sources[0].retrieved_at.date()
 
 
 def _source_refs(entries: Any) -> list[SourceRef]:
     """Rebuild discovery provenance from persisted dicts."""
     refs: list[SourceRef] = []
     for entry in entries or []:
+        if isinstance(entry, SourceRef):
+            refs.append(entry)
+            continue
         if not isinstance(entry, Mapping) or not entry.get("name"):
             continue
         try:
@@ -381,6 +424,13 @@ def promote_verified_rows(
                 )
 
         apply_persisted_evidence(tool, verification)
+        raw_signals = (
+            getattr(prepared, "raw_signals", None)
+            if prepared is not None
+            else payload.get("raw_signals")
+        )
+        if isinstance(raw_signals, Mapping):
+            _directory_upvotes(tool, raw_signals)
 
         if tool.rejected:
             report.rejected_on_promotion += 1

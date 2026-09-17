@@ -568,6 +568,19 @@ def cmd_score(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_finalize_persisted(args: argparse.Namespace) -> int:
+    """Finish processing completed verification artefacts without network I/O."""
+    settings = get_settings(reload=True)
+    pipeline = ToolsPipeline(settings)
+    report, promotion = pipeline.run_from_persisted_verification(
+        verified_path=args.verified_input,
+        resolved_path=args.resolved_input,
+        persist=not args.no_persist,
+    )
+    print(json.dumps({"promotion": promotion.to_dict(), "run": report.to_dict()}, indent=2))
+    return 0
+
+
 def cmd_validate(args: argparse.Namespace) -> int:
     """Validate a dataset against the schema and business rules."""
     validator = ToolValidator()
@@ -750,6 +763,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="refresh the progress state every N verified candidates",
     )
     verify_parser.set_defaults(func=cmd_verify)
+
+    finalize_parser = sub.add_parser(
+        "finalize-persisted",
+        help="finish from persisted verification evidence (no discovery or network)",
+    )
+    finalize_parser.add_argument("--verified-input", default=None)
+    finalize_parser.add_argument("--resolved-input", default=None)
+    finalize_parser.add_argument("--no-persist", action="store_true")
+    finalize_parser.set_defaults(func=cmd_finalize_persisted)
 
     score_parser = sub.add_parser("score", help="re-score an existing dataset")
     score_parser.add_argument("--input", default="data/processed/tools.jsonl")
