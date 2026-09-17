@@ -1,32 +1,43 @@
 {
-  "started_at": "2026-09-16T23:13:37.393448+00:00",
-  "finished_at": "2026-09-16T23:13:38.743866+00:00",
-  "input": 10,
-  "fetched": 10,
-  "verified": 6,
-  "partially_verified": 2,
-  "unverified": 1,
-  "unreachable": 1,
+  "started_at": "2026-09-17T04:03:01.253092+00:00",
+  "finished_at": "2026-09-17T04:03:01.342868+00:00",
+  "input": 2075,
+  "fetched": 1791,
+  "verified": 975,
+  "partially_verified": 219,
+  "unverified": 496,
+  "unreachable": 385,
   "failed": 0,
-  "needs_review": 3,
+  "needs_review": 999,
   "status_counts": {
-    "partially_verified": 2,
-    "unreachable": 1,
-    "unverified": 1,
-    "verified": 6
+    "partially_verified": 219,
+    "unreachable": 385,
+    "unverified": 496,
+    "verified": 975
   },
   "failure_counts": {
-    "bot_challenge": 1,
-    "http_error": 1,
-    "no_product_signal": 2
+    "bot_challenge": 51,
+    "dead_site_marker": 13,
+    "empty_response": 1,
+    "fetch_failed": 284,
+    "http_error": 88,
+    "identity_not_confirmed": 314,
+    "no_product_signal": 441,
+    "off_domain_redirect": 147,
+    "thin_content": 230
   },
   "live": true,
-  "limit": 10,
+  "limit": null,
   "input_candidates": 3441,
-  "considered": 10,
-  "input_source": "/Users/rajaryan/Downloads/webapp 8/data/interim/candidates_resolved.jsonl",
+  "considered": 2075,
+  "input_source": "/home/user/webapp/data/interim/candidates_resolved.jsonl",
   "input_source_kind": "resolved",
+  "resumable": true,
+  "resumed_from_records": 50,
+  "processed_this_pass": 2025,
+  "complete": false,
   "artefacts": {
-    "verified_candidates": "/Users/rajaryan/Downloads/webapp 8/data/interim/candidates_verified.jsonl"
+    "verified_candidates": "/home/user/webapp/data/interim/candidates_verified.jsonl",
+    "verification_state": "/home/user/webapp/data/interim/candidates_verification_state.json"
   }
 }

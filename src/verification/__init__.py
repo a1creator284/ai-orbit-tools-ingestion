@@ -5,6 +5,13 @@ evidence fetched from the product's **own** website. See
 :mod:`src.verification.verifier`.
 """
 
+from src.verification.runner import (
+    VERIFICATION_STATE_FILENAME,
+    CandidateVerificationRunner,
+    completed_keys,
+    summarize_verified_file,
+    verification_key,
+)
 from src.verification.store import (
     VERIFICATION_REPORT_FILENAME,
     VERIFIED_FILENAME,
@@ -25,6 +32,11 @@ from src.verification.verifier import (
 )
 
 __all__ = [
+    "CandidateVerificationRunner",
+    "VERIFICATION_STATE_FILENAME",
+    "completed_keys",
+    "summarize_verified_file",
+    "verification_key",
     "LivenessChecker",
     "LivenessResult",
     "OfficialPageEvidence",

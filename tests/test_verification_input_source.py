@@ -133,22 +133,36 @@ def write_prepared(interim: Path, rows: list[dict[str, Any]]) -> Path:
 
 
 class NoNetworkVerifier:
-    """Verifier stand-in that records every candidate handed to it."""
+    """Verifier stand-in that records every candidate handed to it.
+
+    Both entry points are implemented, because the CLI uses whichever suits
+    the pass: the in-memory ``--no-persist`` path verifies a whole batch, and
+    the resumable production path verifies one candidate at a time so each
+    result can be appended to disk immediately. The assertion this double
+    exists to support — *which URL reached the verifier* — is identical
+    either way.
+    """
 
     def __init__(self) -> None:
         self.seen: list[Any] = []
 
-    def verify_candidates(self, candidates: Any) -> tuple[list[Any], Any]:
-        from src.verification.verifier import OfficialSiteVerifier
-
-        batch = list(candidates)
-        self.seen.extend(batch)
+    @staticmethod
+    def _real() -> Any:
         # Delegate to the real verifier with an offline client so behaviour,
         # statuses and the report stay exactly what production produces.
         from src.core.http_client import OfflineHttpClient
+        from src.verification.verifier import OfficialSiteVerifier
 
-        real = OfficialSiteVerifier(client=OfflineHttpClient(), now=FIXED_NOW)
-        return real.verify_candidates(batch)
+        return OfficialSiteVerifier(client=OfflineHttpClient(), now=FIXED_NOW)
+
+    def verify_candidate(self, candidate: Any) -> Any:
+        self.seen.append(candidate)
+        return self._real().verify_candidate(candidate)
+
+    def verify_candidates(self, candidates: Any) -> tuple[list[Any], Any]:
+        batch = list(candidates)
+        self.seen.extend(batch)
+        return self._real().verify_candidates(batch)
 
 
 @pytest.fixture()
