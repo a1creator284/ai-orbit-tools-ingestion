@@ -48,6 +48,7 @@ from src.enrichment.base import EnrichmentPipeline
 from src.enrichment.editorial import EditorialSynthesizer
 from src.enrichment.relationships import RelationshipExtractor
 from src.extraction.official_page import OfficialFacts, OfficialFactsExtractor
+from src.extraction.runner import apply_facts, load_facts
 from src.models.base import Relationship
 from src.models.tool import Tool
 from src.scoring.filter import FilterDecision, FilterReport, QualityFilter
@@ -702,6 +703,7 @@ class ToolsPipeline:
         *,
         verified_path: str | Path | None = None,
         resolved_path: str | Path | None = None,
+        facts_path: str | Path | None = None,
         persist: bool = True,
     ) -> tuple[RunReport, PromotionReport]:
         """Finish the pipeline from saved live-verification evidence only.
@@ -718,6 +720,11 @@ class ToolsPipeline:
         resolved = Path(resolved_path or interim / "candidates_resolved.jsonl")
         rows = load_verified_rows(verified)
         tools, promotion = promote_verified_rows(rows, resolved_path=resolved)
+        persisted_facts = load_facts(facts_path or interim / "official_facts.jsonl")
+        applied_fact_count = sum(
+            1 for tool in tools
+            if tool.website and (payload := persisted_facts.get(tool.website)) and apply_facts(tool, payload)
+        )
 
         stage = self.report.stage("verify_candidates")
         stage.started_at = _now()
@@ -735,8 +742,7 @@ class ToolsPipeline:
         stage.started_at = _now()
         stage.input_count = stage.output_count = len(tools)
         stage.details = {"mode": "persisted_evidence_replay", "network_calls": 0,
-                         "official_facts_extracted": 0,
-                         "note": "official page markup was not persisted"}
+                         "official_facts_extracted": applied_fact_count}
         stage.finished_at = _now()
 
         quality_kept = self.filter_quality(tools)

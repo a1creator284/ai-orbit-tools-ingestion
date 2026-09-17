@@ -575,9 +575,26 @@ def cmd_finalize_persisted(args: argparse.Namespace) -> int:
     report, promotion = pipeline.run_from_persisted_verification(
         verified_path=args.verified_input,
         resolved_path=args.resolved_input,
+        facts_path=args.facts_input,
         persist=not args.no_persist,
     )
     print(json.dumps({"promotion": promotion.to_dict(), "run": report.to_dict()}, indent=2))
+    return 0
+
+
+def cmd_fetch_official_facts(args: argparse.Namespace) -> int:
+    """Fetch official facts for eligible persisted verification records only."""
+    from src.candidates.promotion import load_verified_rows, promote_verified_rows
+    from src.extraction.official_page import OfficialFactsExtractor
+    from src.extraction.runner import OfficialFactsRunner
+    from src.core.http_client import HttpClient
+
+    settings = get_settings(reload=True)
+    interim = settings.paths.resolve("interim")
+    tools, promotion = promote_verified_rows(load_verified_rows(interim / "candidates_verified.jsonl"), resolved_path=interim / "candidates_resolved.jsonl")
+    runner = OfficialFactsRunner(OfficialFactsExtractor(client=HttpClient()), checkpoint_every=args.checkpoint_every)
+    report = runner.run(tools, interim_dir=interim, limit=args.limit)
+    print(json.dumps({"promotion": promotion.to_dict(), "official_facts": report}, indent=2))
     return 0
 
 
@@ -770,8 +787,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     finalize_parser.add_argument("--verified-input", default=None)
     finalize_parser.add_argument("--resolved-input", default=None)
+    finalize_parser.add_argument("--facts-input", default=None)
     finalize_parser.add_argument("--no-persist", action="store_true")
     finalize_parser.set_defaults(func=cmd_finalize_persisted)
+
+    facts_parser = sub.add_parser("fetch-official-facts", help="resumable official-facts enrichment from verified records")
+    facts_parser.add_argument("--limit", type=int, default=None)
+    facts_parser.add_argument("--checkpoint-every", type=int, default=25)
+    facts_parser.set_defaults(func=cmd_fetch_official_facts)
 
     score_parser = sub.add_parser("score", help="re-score an existing dataset")
     score_parser.add_argument("--input", default="data/processed/tools.jsonl")
