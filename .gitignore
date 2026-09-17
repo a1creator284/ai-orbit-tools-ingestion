@@ -216,3 +216,9 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Transient run logs from the production verification pass (stdout capture and
+# watchdog output). The durable artefacts are the three files under
+# data/interim/ that the checkpoint commits publish.
+logs/verify_run.out
+logs/checkpoint_push.out
